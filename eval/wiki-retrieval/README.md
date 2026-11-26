@@ -178,7 +178,9 @@ Rules:
    - *End-to-end* recall@k, hit@k and MRR: computed over all grade-2 judgements, with unavailable ones counted as not satisfied and marked as caused by coverage, not ranking.
 3. **Report title resolution separately.** For queries that test names and redirects (category `exact_name`, tag `redirect`), report whether the title resolves to the canonical page, resolves only to a redirect with a missing target, or does not resolve. This is distinct from section results and from page-level deduplication, which follow the matching rules above.
 4. **Keep section and page levels apart.** A page can be available while one of its judged sections is not.
-5. **Produce a missing-material report:** the deduplicated list of titles behind every `redirect_target_missing`, `page_missing` and `template_only` state, one title per line, with no Wiki text. It may feed the demand-driven request list in the application, but the scorer only reports. It never fetches anything.
+5. **Produce a missing-material report:** two separate parts, with no Wiki text.
+   - *Missing pages:* the deduplicated titles behind every `redirect_target_missing` and `page_missing` state, plus any specific missing template or page that a `template_only` section depends on and that is known to be relevant. One title per line, paste-ready for a human. It may feed the demand-driven request list in the application, but the scorer only reports: it never fetches anything, never changes the queue, and never queues outgoing links recursively.
+   - *Unsupported or unresolved content:* `template_only` sections whose page is already imported are listed separately, by page and section, as a rendering or expansion limitation. Re-exporting an article that is already in the corpus does not fix this, so these entries are not request titles.
 6. **Keep provisional labels.** Coverage figures count grade-2 judgements, whose grades are provisional (see above), so every coverage, conditional and end-to-end figure is labelled provisional until the relevant queries are `reviewed`.
 7. **Say what the corpus is.** Every run records whether the corpus is `real` or `synthetic`. A synthetic corpus needs its own ground truth and must not reuse these references. Real-corpus scoring is opt-in and subject to the permissions that apply to using Wiki content; nothing here acquires pages automatically or sends excerpts to hosted models.
 
@@ -190,7 +192,7 @@ Rankings and corpora below are invented to show the counting rules.
 
 **One page missing (`q004`).** The corpus has `Rune crossbow` but not `Armadyl crossbow`. Coverage is 1/2. If the engine returns `Rune crossbow > Comparison between other ranged weapons` at rank 1, conditional recall@3 is 1/1 = 1.0 and end-to-end recall@3 is 1/2 = 0.5. The gap between the two figures is the cost of missing material, not of ranking.
 
-**Template-only section.** A judged section exists, but its content is only a template call. It is `template_only`, so it counts against coverage even though the page was found, and it is listed in the missing-material report so the right template can be requested.
+**Template-only section.** A judged section exists, but its content is only a template call. It is `template_only`, so it counts against coverage even though the page was found. It goes in the unsupported-content part of the report as a limitation of the imported article. A title is added to the missing-pages part only when the specific template or page it depends on is known and not yet imported.
 
 ## Evaluation procedure
 
@@ -233,8 +235,9 @@ Because the Wiki changes with game updates, a judged section may be renamed or r
 
 - Add queries with a new `qNNN` id; do not renumber or repurpose ids. Increase `dataset_version` (minor for additions, major when existing meanings change).
 - Record every judged page in `pages` with the title observed after redirects, and every judged section in `observed_sections`. If a section cannot be observed, set the query's `references` to `partial` or `unverified` (and `relevance` to `unresolved` if no reference exists) and explain why in `notes`. Grades start as `provisional`; use `reviewed` only after a person has read the section text.
-- Keep text short and original. Do not paste Wiki text into any field. The structural test rejects fields longer than 500 characters.
-- Check references through the live Wiki only in small numbers, with a descriptive User-Agent and no bulk fetching, and follow the open permission question in [issue #6](https://github.com/whcas/OSRS-MCP/issues/6).
+- Keep text short and original. Do not paste Wiki text into any field. The structural test rejects strings longer than 500 characters, but a length bound cannot show that a short string is not copied text, so a reviewer confirms originality by reading the diff.
+- Check references from manually supplied exports (where the licensing gate in [issue #6](https://github.com/whcas/OSRS-MCP/issues/6) allows it) or by a person reading the page. Do not fetch Wiki pages with scripts or tools, and do not contact the operator, in line with the human-only acquisition policy in the [investigation](../../docs/investigations/wiki-acquisition.md).
+- The 15 to 25 query range checked by the test describes the initial 0.1.0 benchmark. It is not a limit of the format; larger datasets are fine, and the dataset-specific scope checks stay separate from format validation and scoring.
 
 ## Limitations
 

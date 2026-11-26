@@ -3,6 +3,12 @@
 //! These tests read `eval/wiki-retrieval/dataset.v1.json` and enforce the format
 //! documented in `eval/wiki-retrieval/README.md`. They never touch the network
 //! and do not need a retrieval engine.
+//!
+//! Two kinds of assertion live here and are kept apart. Format checks (unique
+//! ids, judged pages recorded, non-overlapping judgements) describe any dataset
+//! in this format. Scope checks (query count, required categories, mode mix)
+//! describe only the initial 0.1.0 benchmark and must not be carried over as
+//! limits when the format types move into a library module.
 
 use std::collections::HashSet;
 use std::fs;
@@ -160,8 +166,10 @@ fn header_identifies_format_and_dataset() {
     );
 }
 
+/// Scope check for the initial 0.1.0 benchmark only. The 15 to 25 range is not
+/// a limit of the format: later dataset versions may be larger.
 #[test]
-fn query_count_and_categories_cover_the_planned_scope() {
+fn initial_benchmark_query_count_and_categories_cover_the_planned_scope() {
     let dataset = load();
 
     assert!(
@@ -420,24 +428,47 @@ fn pages_are_unique_and_revisions_are_consistent() {
     }
 }
 
+/// Bounds the length of every free-text string in the dataset. This is a
+/// guard against pasted passages, not proof of provenance: a short string can
+/// still be copied text, so the dataset's originality is confirmed by manual
+/// review (see "Extending the dataset" in the README).
 #[test]
-fn every_text_field_is_short_enough_to_exclude_wiki_excerpts() {
+fn every_free_text_string_is_length_bounded() {
     let dataset = load();
-    let mut fields: Vec<&str> = vec![&dataset.source.method, &dataset.source.licence_note];
+    let mut fields: Vec<&str> = vec![
+        &dataset.id,
+        &dataset.version,
+        &dataset.created,
+        &dataset.source.site,
+        &dataset.source.observed_on,
+        &dataset.source.method,
+        &dataset.source.licence_note,
+    ];
     fields.extend(dataset.grades.values().map(String::as_str));
     fields.extend(dataset.modes.values().map(String::as_str));
+    for retired in &dataset.retired_query_ids {
+        fields.push(&retired.id);
+        fields.push(&retired.reason);
+    }
     for page in &dataset.pages {
         fields.push(&page.title);
         fields.extend(page.requested_as.iter().map(String::as_str));
+        fields.extend(page.last_modified.as_deref());
         fields.extend(page.observed_sections.iter().map(String::as_str));
         fields.extend(page.note.as_deref());
     }
     for query in &dataset.queries {
+        fields.push(&query.id);
+        fields.push(&query.category);
         fields.push(&query.text);
         fields.push(&query.intent);
         fields.push(&query.mode);
         fields.extend(query.tags.iter().map(String::as_str));
         fields.extend(query.notes.as_deref());
+        for judgement in &query.judgements {
+            fields.push(&judgement.page);
+            fields.extend(judgement.section.as_deref());
+        }
     }
 
     for field in fields {
