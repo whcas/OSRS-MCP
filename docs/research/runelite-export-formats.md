@@ -115,7 +115,7 @@ Aligned with the maintainer's clarifications on #15 and #19.
 
 **Optional or ignored**
 - `boosted_level` is part of the upstream schema and is documented above, but the minimal importer **intentionally ignores it**: it is not parsed, validated or retained, so advice cannot depend on it.
-- `plugin_version` is recorded as text; any value is accepted.
+- `plugin_version` is recorded as text. Any JSON *string* is accepted, whatever its content; a missing field or an explicit `null` is `None`; any other JSON type (number, boolean, array, object) is an error.
 - `account_name`, `world`, `game_state`, `world_types` and `reason` are not required. `account_name` is a personal identifier and is **not retained**.
 - `session_id` is **not retained**.
 

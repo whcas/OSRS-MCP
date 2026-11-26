@@ -22,15 +22,42 @@ fn an_authentic_local_export_imports_without_warnings_or_errors() {
         println!("skipped: set {PATH_VAR} to run the local export check");
         return;
     };
-    let bytes = std::fs::read(path).expect("the export file is readable");
-
-    let export = parse_character_export(&bytes).expect("the export imports");
+    // Failure messages are fixed text: the parsed value, its error and the
+    // warnings can contain skill names or other export content, which must not
+    // reach test output even when the check fails.
+    let Ok(bytes) = std::fs::read(path) else {
+        panic!("the export file could not be read (details withheld)");
+    };
+    let Ok(export) = parse_character_export(&bytes) else {
+        panic!("the export did not import (details withheld)");
+    };
 
     println!(
-        "imported {} skills, {} warnings, plugin version {:?}",
+        "imported {} skills, {} warnings, plugin version {}",
         export.skills().len(),
         export.warnings().len(),
-        export.plugin_version()
+        printable_version(export.plugin_version())
     );
-    assert_eq!(export.warnings(), []);
+    assert!(
+        export.warnings().is_empty(),
+        "the import produced {} warnings (details withheld)",
+        export.warnings().len()
+    );
+}
+
+/// The plugin version if it looks like a version number, else a placeholder,
+/// so arbitrary text from the file is never printed.
+fn printable_version(version: Option<&str>) -> &str {
+    match version {
+        Some(text)
+            if (1..=16).contains(&text.len())
+                && text
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'.') =>
+        {
+            text
+        }
+        Some(_) => "<unrecognised format>",
+        None => "<none>",
+    }
 }
