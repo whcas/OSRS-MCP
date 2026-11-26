@@ -107,21 +107,41 @@ pub struct LatestPrices {
     pub low: Option<TimedPrice>,
 }
 
-/// Average price and trade count for one side over a window.
+/// Average price and reported volume for one side over a window.
+///
+/// Both values are kept exactly as the API reports them. What they measure is
+/// **not fully verified** (see `docs/investigations/hardcore-ge-data-source.md`):
+/// the API documentation says only "number traded", so `volume` may count items
+/// or transactions, and the correspondence of a side to instant-buy or
+/// instant-sell is inferred from the field names, not stated for these endpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SideStats {
-    /// Average price, or `None` when nothing traded on this side.
+    /// Average price, or `None` when the API reported `null` for this side.
     pub average_price: Option<AveragePrice>,
-    /// Number of trades on this side in the window.
+    /// The reported volume. Its unit (items or transactions) is unverified.
     pub volume: u64,
+}
+
+impl SideStats {
+    /// Whether the API reported a positive volume but no average price.
+    ///
+    /// That combination contradicts itself. It was not seen in live data, so
+    /// the parser does not reject it, but callers should not treat such a side
+    /// as reliable.
+    #[must_use]
+    pub const fn has_volume_without_average(&self) -> bool {
+        self.average_price.is_none() && self.volume > 0
+    }
 }
 
 /// Both sides' statistics over one window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowStats {
-    /// Instant-buy side (`avgHighPrice`, `highPriceVolume`).
+    /// The `avgHighPrice` and `highPriceVolume` side. By naming this is the
+    /// instant-buy side, which is inferred, not documented for these endpoints.
     pub high: SideStats,
-    /// Instant-sell side (`avgLowPrice`, `lowPriceVolume`).
+    /// The `avgLowPrice` and `lowPriceVolume` side. By naming this is the
+    /// instant-sell side, which is inferred, not documented for these endpoints.
     pub low: SideStats,
 }
 

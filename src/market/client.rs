@@ -205,7 +205,7 @@ impl HardcoreClient {
             .into_iter()
             .collect();
         let (url, body) = self.get(endpoint, &query).await?;
-        self.observed(endpoint, &url, parse::window(endpoint, &body)?)
+        self.observed(endpoint, &url, parse::window(endpoint, &body, starts_at)?)
     }
 
     /// Price history for one item (`/timeseries`).

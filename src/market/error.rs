@@ -34,11 +34,17 @@ pub enum MarketDataError {
         status: u16,
     },
     /// The body was not the documented shape.
+    ///
+    /// This carries only a fixed description and, where one applies, the name
+    /// of the offending field. It never includes response text, so an
+    /// oversized or hostile body cannot produce an oversized diagnostic.
     Malformed {
         /// The endpoint requested.
         endpoint: Endpoint,
-        /// What was wrong.
-        reason: String,
+        /// The documented field that was missing or invalid, if one applies.
+        field: Option<&'static str>,
+        /// What was wrong, as fixed text.
+        reason: &'static str,
     },
     /// The body exceeded the configured size limit and was discarded.
     ResponseTooLarge {
@@ -66,7 +72,20 @@ impl fmt::Display for MarketDataError {
                 "Hardcore {} endpoint returned HTTP {status}",
                 endpoint.path()
             ),
-            Self::Malformed { endpoint, reason } => write!(
+            Self::Malformed {
+                endpoint,
+                field: Some(field),
+                reason,
+            } => write!(
+                f,
+                "Hardcore {} response was malformed: {reason} (field `{field}`)",
+                endpoint.path()
+            ),
+            Self::Malformed {
+                endpoint,
+                field: None,
+                reason,
+            } => write!(
                 f,
                 "Hardcore {} response was malformed: {reason}",
                 endpoint.path()

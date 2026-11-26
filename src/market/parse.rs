@@ -1,8 +1,23 @@
 //! Pure parsing of API response bodies into typed results. No I/O.
+//!
+//! Every JSON object is read through [`Object`], which only accepts a JSON
+//! object (never a positional array) and keeps each field as raw text. Fields
+//! are then read by name, so a missing field, an explicit `null` and a wrong
+//! type are all distinguishable, and error values never contain response text.
+//!
+//! Policies, all checked by tests:
+//!
+//! - A key that is not the canonical decimal spelling of an item id (for
+//!   example `"01"` or `"+1"`) is rejected, so two spellings can never
+//!   collapse into one item.
+//! - If the same key appears twice in one JSON object, the last value wins;
+//!   JSON leaves this undefined and the API does not produce it.
+//! - Unknown fields are ignored.
 
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 
 use super::error::MarketDataError;
@@ -11,84 +26,113 @@ use super::model::{
     SeriesPoint, SideStats, TimedPrice, UnixSeconds, WindowStats,
 };
 
+/// A JSON object whose fields are still raw text.
 #[derive(Deserialize)]
-struct Envelope<T> {
-    data: T,
-}
+#[serde(transparent)]
+struct Object(BTreeMap<String, Box<RawValue>>);
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LatestEntry {
-    high: Option<u64>,
-    high_time: Option<u64>,
-    low: Option<u64>,
-    low_time: Option<u64>,
-}
+impl Object {
+    /// The field `name`, which must be present and not `null`.
+    fn required<T: DeserializeOwned>(
+        &self,
+        endpoint: Endpoint,
+        name: &'static str,
+    ) -> Result<T, MarketDataError> {
+        self.nullable(endpoint, name)?
+            .ok_or_else(|| invalid_field(endpoint, name))
+    }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WindowEntry {
-    avg_high_price: Option<Box<RawValue>>,
-    high_price_volume: u64,
-    avg_low_price: Option<Box<RawValue>>,
-    low_price_volume: u64,
-}
+    /// The field `name`, which must be present. An explicit `null` is `None`.
+    fn nullable<T: DeserializeOwned>(
+        &self,
+        endpoint: Endpoint,
+        name: &'static str,
+    ) -> Result<Option<T>, MarketDataError> {
+        let raw = self
+            .0
+            .get(name)
+            .ok_or_else(|| missing_field(endpoint, name))?;
+        serde_json::from_str(raw.get()).map_err(|_| invalid_field(endpoint, name))
+    }
 
-#[derive(Deserialize)]
-struct WindowBody {
-    data: BTreeMap<String, WindowEntry>,
-    timestamp: Option<u64>,
-}
+    /// The field `name`, which may be absent or `null`.
+    fn optional<T: DeserializeOwned>(
+        &self,
+        endpoint: Endpoint,
+        name: &'static str,
+    ) -> Result<Option<T>, MarketDataError> {
+        if self.0.contains_key(name) {
+            self.nullable(endpoint, name)
+        } else {
+            Ok(None)
+        }
+    }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SeriesPointEntry {
-    timestamp: u64,
-    avg_high_price: Option<Box<RawValue>>,
-    high_price_volume: u64,
-    avg_low_price: Option<Box<RawValue>>,
-    low_price_volume: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SeriesBody {
-    data: Vec<SeriesPointEntry>,
-    item_id: u32,
-    start_timestamp: u64,
-    end_timestamp: u64,
-    timestep: u64,
-}
-
-#[derive(Deserialize)]
-struct MappingEntry {
-    id: u32,
-    name: String,
-    members: Option<bool>,
-    limit: Option<u32>,
-    value: Option<u64>,
-    lowalch: Option<u64>,
-    highalch: Option<u64>,
-}
-
-fn malformed(endpoint: Endpoint, reason: impl Into<String>) -> MarketDataError {
-    MarketDataError::Malformed {
-        endpoint,
-        reason: reason.into(),
+    /// The raw text of the field `name`, which must be present; `None` if it
+    /// is `null`. Used for numbers that must be read exactly.
+    fn nullable_raw(
+        &self,
+        endpoint: Endpoint,
+        name: &'static str,
+    ) -> Result<Option<&RawValue>, MarketDataError> {
+        let raw = self
+            .0
+            .get(name)
+            .ok_or_else(|| missing_field(endpoint, name))?;
+        Ok((raw.get() != "null").then_some(raw))
     }
 }
 
-fn from_json<'a, T: Deserialize<'a>>(
+const fn malformed(
     endpoint: Endpoint,
-    body: &'a [u8],
-) -> Result<T, MarketDataError> {
-    serde_json::from_slice(body).map_err(|error| malformed(endpoint, error.to_string()))
+    field: Option<&'static str>,
+    reason: &'static str,
+) -> MarketDataError {
+    MarketDataError::Malformed {
+        endpoint,
+        field,
+        reason,
+    }
 }
 
+const fn missing_field(endpoint: Endpoint, field: &'static str) -> MarketDataError {
+    malformed(endpoint, Some(field), "required field is missing")
+}
+
+const fn invalid_field(endpoint: Endpoint, field: &'static str) -> MarketDataError {
+    malformed(
+        endpoint,
+        Some(field),
+        "field has an unexpected type or value",
+    )
+}
+
+/// Parses a whole body. The error says only whether the JSON was invalid or
+/// had the wrong shape, never what the body contained.
+fn from_json<T: DeserializeOwned>(endpoint: Endpoint, body: &[u8]) -> Result<T, MarketDataError> {
+    serde_json::from_slice(body).map_err(|error| match error.classify() {
+        serde_json::error::Category::Data => {
+            malformed(endpoint, None, "body does not have the documented shape")
+        }
+        _ => malformed(endpoint, None, "body is not valid JSON"),
+    })
+}
+
+/// Parses one nested value, such as an entry of `data`, that is known to be
+/// valid JSON because the whole body parsed.
+fn from_raw<T: DeserializeOwned>(endpoint: Endpoint, raw: &RawValue) -> Result<T, MarketDataError> {
+    serde_json::from_str(raw.get())
+        .map_err(|_| malformed(endpoint, None, "entry does not have the documented shape"))
+}
+
+/// An item id from an object key. Only the canonical decimal spelling is
+/// accepted, so distinct keys cannot resolve to the same id.
 fn item_id(endpoint: Endpoint, key: &str) -> Result<ItemId, MarketDataError> {
-    key.parse()
+    key.parse::<u32>()
+        .ok()
+        .filter(|id| id.to_string() == key)
         .map(ItemId)
-        .map_err(|_| malformed(endpoint, format!("item key {key:?} is not an item id")))
+        .ok_or_else(|| malformed(endpoint, None, "item key is not a canonical item id"))
 }
 
 /// Converts a JSON number literal to hundredths of a GP from its exact text.
@@ -96,14 +140,13 @@ fn item_id(endpoint: Endpoint, key: &str) -> Result<ItemId, MarketDataError> {
 /// The literal is captured as a `RawValue`, so no floating-point rounding
 /// happens. More than two decimals, negatives and exponent notation (`1e3`)
 /// are rejected rather than rounded or interpreted.
-fn average_price(endpoint: Endpoint, number: &RawValue) -> Result<AveragePrice, MarketDataError> {
+fn average_price(
+    endpoint: Endpoint,
+    field: &'static str,
+    number: &RawValue,
+) -> Result<AveragePrice, MarketDataError> {
     let text = number.get();
-    let bad = || {
-        malformed(
-            endpoint,
-            format!("average price {text} is not a non-negative amount with at most two decimals"),
-        )
-    };
+    let bad = || invalid_field(endpoint, field);
     if text.contains(['-', 'e', 'E']) {
         return Err(bad());
     }
@@ -120,38 +163,35 @@ fn average_price(endpoint: Endpoint, number: &RawValue) -> Result<AveragePrice, 
         .ok_or_else(bad)
 }
 
-fn side_stats(
-    endpoint: Endpoint,
-    average: Option<&RawValue>,
-    volume: u64,
-) -> Result<SideStats, MarketDataError> {
-    Ok(SideStats {
-        average_price: average.map(|n| average_price(endpoint, n)).transpose()?,
-        volume,
-    })
-}
-
-fn window_stats(endpoint: Endpoint, entry: &WindowEntry) -> Result<WindowStats, MarketDataError> {
+/// Averages and volumes of one window entry, which `/5m`, `/1h` and each
+/// `/timeseries` point share. All four fields must be present; only the
+/// averages may be `null`.
+fn window_stats(endpoint: Endpoint, entry: &Object) -> Result<WindowStats, MarketDataError> {
+    let side =
+        |average: &'static str, volume: &'static str| -> Result<SideStats, MarketDataError> {
+            Ok(SideStats {
+                average_price: entry
+                    .nullable_raw(endpoint, average)?
+                    .map(|number| average_price(endpoint, average, number))
+                    .transpose()?,
+                volume: entry.required(endpoint, volume)?,
+            })
+        };
     Ok(WindowStats {
-        high: side_stats(
-            endpoint,
-            entry.avg_high_price.as_deref(),
-            entry.high_price_volume,
-        )?,
-        low: side_stats(
-            endpoint,
-            entry.avg_low_price.as_deref(),
-            entry.low_price_volume,
-        )?,
+        high: side("avgHighPrice", "highPriceVolume")?,
+        low: side("avgLowPrice", "lowPriceVolume")?,
     })
 }
 
+/// One side of a `/latest` entry. The key pair must be present; a price and
+/// its time must be both set or both `null`.
 fn timed_price(
     endpoint: Endpoint,
-    side: &str,
-    price: Option<u64>,
-    time: Option<u64>,
+    entry: &Object,
+    (price_key, time_key): (&'static str, &'static str),
 ) -> Result<Option<TimedPrice>, MarketDataError> {
+    let price: Option<u64> = entry.nullable(endpoint, price_key)?;
+    let time: Option<u64> = entry.nullable(endpoint, time_key)?;
     match (price, time) {
         (Some(price), Some(time)) => Ok(Some(TimedPrice {
             price: Price(price),
@@ -160,7 +200,8 @@ fn timed_price(
         (None, None) => Ok(None),
         _ => Err(malformed(
             endpoint,
-            format!("{side} price and {side} time must be both present or both null"),
+            Some(price_key),
+            "price and time must be both present or both null",
         )),
     }
 }
@@ -175,21 +216,23 @@ pub(super) fn latest(
     scope: Option<ItemId>,
 ) -> Result<BTreeMap<ItemId, LatestPrices>, MarketDataError> {
     const ENDPOINT: Endpoint = Endpoint::Latest;
-    let envelope: Envelope<BTreeMap<String, LatestEntry>> = from_json(ENDPOINT, body)?;
-    envelope
-        .data
-        .into_iter()
-        .map(|(key, entry)| {
-            let id = item_id(ENDPOINT, &key)?;
+    let envelope: Object = from_json(ENDPOINT, body)?;
+    let data: Object = envelope.required(ENDPOINT, "data")?;
+    data.0
+        .iter()
+        .map(|(key, raw)| {
+            let id = item_id(ENDPOINT, key)?;
             if scope.is_some_and(|requested| requested != id) {
                 return Err(malformed(
                     ENDPOINT,
-                    format!("response contains item {key} but a different item was requested"),
+                    None,
+                    "response contains an item other than the one requested",
                 ));
             }
+            let entry: Object = from_raw(ENDPOINT, raw)?;
             let prices = LatestPrices {
-                high: timed_price(ENDPOINT, "high", entry.high, entry.high_time)?,
-                low: timed_price(ENDPOINT, "low", entry.low, entry.low_time)?,
+                high: timed_price(ENDPOINT, &entry, ("high", "highTime"))?,
+                low: timed_price(ENDPOINT, &entry, ("low", "lowTime"))?,
             };
             Ok((id, prices))
         })
@@ -197,87 +240,101 @@ pub(super) fn latest(
 }
 
 /// Parses a `/5m` or `/1h` body.
-pub(super) fn window(endpoint: Endpoint, body: &[u8]) -> Result<PriceWindow, MarketDataError> {
-    let parsed: WindowBody = from_json(endpoint, body)?;
-    let items = parsed
-        .data
+///
+/// When a window start was `requested`, the response must carry exactly that
+/// timestamp: the API echoes an aligned request and answers anything else with
+/// HTTP 400, so a different value means the data is for another period.
+pub(super) fn window(
+    endpoint: Endpoint,
+    body: &[u8],
+    requested: Option<UnixSeconds>,
+) -> Result<PriceWindow, MarketDataError> {
+    let envelope: Object = from_json(endpoint, body)?;
+    let data: Object = envelope.required(endpoint, "data")?;
+    let starts_at = envelope.optional(endpoint, "timestamp")?.map(UnixSeconds);
+    if requested.is_some() && starts_at != requested {
+        return Err(malformed(
+            endpoint,
+            Some("timestamp"),
+            "window start differs from the one requested",
+        ));
+    }
+    let items = data
+        .0
         .iter()
-        .map(|(key, entry)| Ok((item_id(endpoint, key)?, window_stats(endpoint, entry)?)))
+        .map(|(key, raw)| {
+            let entry: Object = from_raw(endpoint, raw)?;
+            Ok((item_id(endpoint, key)?, window_stats(endpoint, &entry)?))
+        })
         .collect::<Result<_, MarketDataError>>()?;
-    Ok(PriceWindow {
-        starts_at: parsed.timestamp.map(UnixSeconds),
-        items,
-    })
+    Ok(PriceWindow { starts_at, items })
 }
 
 /// Parses a `/timeseries` body for the `requested` item. A response for a
 /// different item, a zero timestep or a start after the end is malformed.
 pub(super) fn timeseries(body: &[u8], requested: ItemId) -> Result<Series, MarketDataError> {
     const ENDPOINT: Endpoint = Endpoint::Timeseries;
-    let parsed: SeriesBody = from_json(ENDPOINT, body)?;
-    if ItemId(parsed.item_id) != requested {
+    let envelope: Object = from_json(ENDPOINT, body)?;
+    let item = ItemId(envelope.required(ENDPOINT, "itemId")?);
+    let starts_at: u64 = envelope.required(ENDPOINT, "startTimestamp")?;
+    let ends_at: u64 = envelope.required(ENDPOINT, "endTimestamp")?;
+    let timestep_seconds: u64 = envelope.required(ENDPOINT, "timestep")?;
+    if item != requested {
         return Err(malformed(
             ENDPOINT,
-            format!(
-                "response is for item {} but item {} was requested",
-                parsed.item_id, requested.0
-            ),
+            Some("itemId"),
+            "response is for a different item than requested",
         ));
     }
-    if parsed.timestep == 0 {
-        return Err(malformed(ENDPOINT, "timestep is zero"));
+    if timestep_seconds == 0 {
+        return Err(malformed(ENDPOINT, Some("timestep"), "timestep is zero"));
     }
-    if parsed.start_timestamp > parsed.end_timestamp {
+    if starts_at > ends_at {
         return Err(malformed(
             ENDPOINT,
+            Some("startTimestamp"),
             "start timestamp is after end timestamp",
         ));
     }
-    let points = parsed
-        .data
+    let points = envelope
+        .required::<Vec<Box<RawValue>>>(ENDPOINT, "data")?
         .iter()
-        .map(|point| {
+        .map(|raw| {
+            let point: Object = from_raw(ENDPOINT, raw)?;
             Ok(SeriesPoint {
-                timestamp: UnixSeconds(point.timestamp),
-                stats: WindowStats {
-                    high: side_stats(
-                        ENDPOINT,
-                        point.avg_high_price.as_deref(),
-                        point.high_price_volume,
-                    )?,
-                    low: side_stats(
-                        ENDPOINT,
-                        point.avg_low_price.as_deref(),
-                        point.low_price_volume,
-                    )?,
-                },
+                timestamp: UnixSeconds(point.required(ENDPOINT, "timestamp")?),
+                stats: window_stats(ENDPOINT, &point)?,
             })
         })
         .collect::<Result<_, MarketDataError>>()?;
     Ok(Series {
-        item: ItemId(parsed.item_id),
-        starts_at: UnixSeconds(parsed.start_timestamp),
-        ends_at: UnixSeconds(parsed.end_timestamp),
-        timestep_seconds: parsed.timestep,
+        item,
+        starts_at: UnixSeconds(starts_at),
+        ends_at: UnixSeconds(ends_at),
+        timestep_seconds,
         points,
     })
 }
 
-/// Parses a `/mapping` body.
+/// Parses a `/mapping` body. Only `id` and `name` are required; the other
+/// fields were observed to be absent for some items.
 pub(super) fn mapping(body: &[u8]) -> Result<Vec<ItemInfo>, MarketDataError> {
-    let entries: Vec<MappingEntry> = from_json(Endpoint::Mapping, body)?;
-    Ok(entries
-        .into_iter()
-        .map(|entry| ItemInfo {
-            id: ItemId(entry.id),
-            name: entry.name,
-            members: entry.members,
-            buy_limit: entry.limit,
-            value: entry.value,
-            low_alchemy: entry.lowalch,
-            high_alchemy: entry.highalch,
+    const ENDPOINT: Endpoint = Endpoint::Mapping;
+    let entries: Vec<Object> = from_json(ENDPOINT, body)?;
+    entries
+        .iter()
+        .map(|entry| {
+            Ok(ItemInfo {
+                id: ItemId(entry.required(ENDPOINT, "id")?),
+                name: entry.required(ENDPOINT, "name")?,
+                members: entry.optional(ENDPOINT, "members")?,
+                buy_limit: entry.optional(ENDPOINT, "limit")?,
+                value: entry.optional(ENDPOINT, "value")?,
+                low_alchemy: entry.optional(ENDPOINT, "lowalch")?,
+                high_alchemy: entry.optional(ENDPOINT, "highalch")?,
+            })
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -341,7 +398,7 @@ mod tests {
 
     #[test]
     fn window_preserves_null_averages_zero_volumes_and_decimals() {
-        let window = window(Endpoint::FiveMinute, FIVE_MINUTE.as_bytes()).unwrap();
+        let window = window(Endpoint::FiveMinute, FIVE_MINUTE.as_bytes(), None).unwrap();
         assert_eq!(window.starts_at, Some(UnixSeconds(1_795_504_200)));
         assert_eq!(window.items.len(), 4);
 
@@ -375,7 +432,7 @@ mod tests {
 
     #[test]
     fn window_without_a_timestamp_reports_none_rather_than_inventing_one() {
-        let window = window(Endpoint::OneHour, br#"{"data":{}}"#).unwrap();
+        let window = window(Endpoint::OneHour, br#"{"data":{}}"#, None).unwrap();
         assert_eq!(window.starts_at, None);
     }
 
@@ -383,7 +440,7 @@ mod tests {
     fn average_prices_are_exact_or_rejected() {
         let parse = |text: &str| {
             let number: Box<RawValue> = serde_json::from_str(text).unwrap();
-            average_price(Endpoint::OneHour, &number)
+            average_price(Endpoint::OneHour, "avgHighPrice", &number)
         };
         assert_eq!(parse("0").unwrap().hundredths, 0);
         assert_eq!(parse("0.07").unwrap().hundredths, 7);
@@ -401,15 +458,23 @@ mod tests {
         // As an f64 this literal is exactly 227.22, so without exact lexemes it
         // would be accepted as 22,722 hundredths.
         let body = br#"{"data":{"1":{"avgHighPrice":227.2200000000000000001,"highPriceVolume":1,"avgLowPrice":null,"lowPriceVolume":0}}}"#;
-        assert!(is_malformed(&window(Endpoint::FiveMinute, body)));
+        assert!(is_malformed(&window(Endpoint::FiveMinute, body, None)));
     }
 
     #[test]
     fn exponent_notation_is_rejected_not_interpreted() {
         let number: Box<RawValue> = serde_json::from_str("1e3").unwrap();
-        assert!(is_malformed(&average_price(Endpoint::OneHour, &number)));
+        assert!(is_malformed(&average_price(
+            Endpoint::OneHour,
+            "avgHighPrice",
+            &number
+        )));
         let number: Box<RawValue> = serde_json::from_str("1.5E2").unwrap();
-        assert!(is_malformed(&average_price(Endpoint::OneHour, &number)));
+        assert!(is_malformed(&average_price(
+            Endpoint::OneHour,
+            "avgHighPrice",
+            &number
+        )));
     }
 
     #[test]
@@ -500,14 +565,166 @@ mod tests {
         )));
         assert!(is_malformed(&window(
             Endpoint::FiveMinute,
-            br#"{"data":{"1":{"avgHighPrice":"12","highPriceVolume":1,"avgLowPrice":null,"lowPriceVolume":0}}}"#
+            br#"{"data":{"1":{"avgHighPrice":"12","highPriceVolume":1,"avgLowPrice":null,"lowPriceVolume":0}}}"#,
+            None
         )));
         assert!(is_malformed(&window(
             Endpoint::FiveMinute,
-            br#"{"data":{"1":{"avgHighPrice":1,"avgLowPrice":null,"lowPriceVolume":0}}}"#
+            br#"{"data":{"1":{"avgHighPrice":1,"avgLowPrice":null,"lowPriceVolume":0}}}"#,
+            None
         )));
         assert!(is_malformed(&timeseries(br#"{"data":[]}"#, ItemId(4151))));
         assert!(is_malformed(&mapping(br#"{"id":1}"#)));
         assert!(is_malformed(&mapping(br#"[{"id":1}]"#)));
+    }
+
+    #[test]
+    fn json_arrays_are_never_read_as_objects_by_position() {
+        // A derived `Deserialize` would accept each of these positionally.
+        assert!(is_malformed(&latest(
+            br#"{"data":{"1":[1,2,null,null]}}"#,
+            None
+        )));
+        assert!(is_malformed(&latest(br#"[{"1":{}}]"#, None)));
+        assert!(is_malformed(&latest(b"[{}]", None)));
+        assert!(is_malformed(&window(
+            Endpoint::FiveMinute,
+            br#"{"data":{"1":[1,1,null,0]}}"#,
+            None
+        )));
+        assert!(is_malformed(&window(Endpoint::OneHour, b"[{}]", None)));
+        assert!(is_malformed(&timeseries(
+            b"[[],4151,0,10,300]",
+            ItemId(4151)
+        )));
+        let point_as_array = br#"{"data":[[1,1,null,0,null]],"itemId":4151,"startTimestamp":1,"endTimestamp":2,"timestep":300}"#;
+        assert!(is_malformed(&timeseries(point_as_array, ItemId(4151))));
+        assert!(is_malformed(&mapping(br#"[[1,"name"]]"#)));
+    }
+
+    #[test]
+    fn an_empty_latest_entry_is_not_a_never_observed_item() {
+        // A never-observed item has all four keys with explicit nulls; an empty
+        // object is a malformed response, not the same thing.
+        assert!(is_malformed(&latest(br#"{"data":{"1":{}}}"#, None)));
+        let missing_low_time = br#"{"data":{"1":{"high":null,"highTime":null,"low":null}}}"#;
+        assert!(is_malformed(&latest(missing_low_time, None)));
+        let explicit = br#"{"data":{"1":{"high":null,"highTime":null,"low":null,"lowTime":null}}}"#;
+        assert_eq!(latest(explicit, None).unwrap()[&ItemId(1)].high, None);
+    }
+
+    #[test]
+    fn window_entries_must_carry_all_four_fields_with_non_null_volumes() {
+        let ok = br#"{"data":{"1":{"avgHighPrice":null,"highPriceVolume":0,"avgLowPrice":null,"lowPriceVolume":0}}}"#;
+        assert!(window(Endpoint::FiveMinute, ok, None).is_ok());
+        let no_average_key =
+            br#"{"data":{"1":{"highPriceVolume":0,"avgLowPrice":null,"lowPriceVolume":0}}}"#;
+        assert!(is_malformed(&window(
+            Endpoint::FiveMinute,
+            no_average_key,
+            None
+        )));
+        let null_volume = br#"{"data":{"1":{"avgHighPrice":null,"highPriceVolume":null,"avgLowPrice":null,"lowPriceVolume":0}}}"#;
+        assert!(is_malformed(&window(
+            Endpoint::FiveMinute,
+            null_volume,
+            None
+        )));
+        assert!(is_malformed(&window(
+            Endpoint::FiveMinute,
+            br#"{"data":{"1":{}}}"#,
+            None
+        )));
+    }
+
+    #[test]
+    fn mapping_requires_id_and_name_and_tolerates_nulls_in_optional_fields() {
+        let sparse = br#"[{"id":1,"name":"x","limit":null,"value":5}]"#;
+        let items = mapping(sparse).unwrap();
+        assert_eq!((items[0].buy_limit, items[0].value), (None, Some(5)));
+        assert!(is_malformed(&mapping(br#"[{"name":"x"}]"#)));
+        assert!(is_malformed(&mapping(br#"[{"id":1}]"#)));
+        assert!(is_malformed(&mapping(br#"[{"id":1,"name":null}]"#)));
+    }
+
+    #[test]
+    fn non_canonical_item_key_spellings_are_rejected() {
+        let entry = r#"{"high":null,"highTime":null,"low":null,"lowTime":null}"#;
+        for key in ["01", "+1", "1.0", " 1", "1 ", "0x1", "-1", "4294967296", ""] {
+            let body = format!(r#"{{"data":{{"{key}":{entry}}}}}"#);
+            assert!(is_malformed(&latest(body.as_bytes(), None)), "{key:?}");
+        }
+        let canonical = format!(r#"{{"data":{{"1":{entry},"10":{entry},"0":{entry}}}}}"#);
+        assert_eq!(latest(canonical.as_bytes(), None).unwrap().len(), 3);
+        // The same spelling twice cannot be told apart by id; the last value
+        // wins, which is the documented policy.
+        let repeated = br#"{"data":{"1":{"high":1,"highTime":1,"low":null,"lowTime":null},"1":{"high":2,"highTime":2,"low":null,"lowTime":null}}}"#;
+        let items = latest(repeated, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[&ItemId(1)].high.map(|t| t.price), Some(Price(2)));
+    }
+
+    #[test]
+    fn a_window_for_another_period_than_requested_is_rejected() {
+        let body = br#"{"data":{},"timestamp":1795707600}"#;
+        let same = Some(UnixSeconds(1_795_707_600));
+        let other = Some(UnixSeconds(1_795_707_900));
+        assert!(window(Endpoint::FiveMinute, body, same).is_ok());
+        assert!(is_malformed(&window(Endpoint::FiveMinute, body, other)));
+        // A requested start with no timestamp in the response is also unreliable.
+        assert!(is_malformed(&window(
+            Endpoint::FiveMinute,
+            br#"{"data":{}}"#,
+            same
+        )));
+        // Unscoped requests take whatever the API reports.
+        assert!(window(Endpoint::FiveMinute, body, None).is_ok());
+    }
+
+    #[test]
+    fn a_side_with_volume_but_no_average_is_flagged_not_hidden() {
+        let body = br#"{"data":{"1":{"avgHighPrice":null,"highPriceVolume":3,"avgLowPrice":5,"lowPriceVolume":2}}}"#;
+        let stats = window(Endpoint::FiveMinute, body, None).unwrap().items[&ItemId(1)];
+        assert_eq!(stats.high.volume, 3, "the raw volume is preserved");
+        assert!(stats.high.has_volume_without_average());
+        assert!(!stats.low.has_volume_without_average());
+    }
+
+    #[test]
+    fn error_text_is_bounded_whatever_the_response_contains() {
+        let huge = "x".repeat(1_000_000);
+        let cases = [
+            format!(r#"{{"data":{{"{huge}":{{}}}}}}"#),
+            format!(
+                r#"{{"data":{{"1":{{"high":"{huge}","highTime":1,"low":null,"lowTime":null}}}}}}"#
+            ),
+            format!(
+                r#"{{"data":{{"1":{{"avgHighPrice":1.{digits}"#,
+                digits = "9".repeat(1_000_000)
+            ),
+            format!("{{\"data\":{huge}}}"),
+            huge,
+        ];
+        for body in cases {
+            for result in [
+                latest(body.as_bytes(), None).map(|_| ()),
+                window(Endpoint::FiveMinute, body.as_bytes(), None).map(|_| ()),
+                timeseries(body.as_bytes(), ItemId(1)).map(|_| ()),
+                mapping(body.as_bytes()).map(|_| ()),
+            ] {
+                if let Err(error) = result {
+                    assert!(error.to_string().len() < 200, "{}", error.to_string().len());
+                    assert!(!error.to_string().contains("xxxx"));
+                    assert!(!format!("{error:?}").contains("xxxx"));
+                }
+            }
+        }
+        let overlong_average = format!(
+            r#"{{"data":{{"1":{{"avgHighPrice":1.{},"highPriceVolume":1,"avgLowPrice":null,"lowPriceVolume":0}}}}}}"#,
+            "9".repeat(1_000_000)
+        );
+        let error = window(Endpoint::FiveMinute, overlong_average.as_bytes(), None).unwrap_err();
+        assert!(error.to_string().len() < 200);
+        assert!(!error.to_string().contains("999"));
     }
 }
