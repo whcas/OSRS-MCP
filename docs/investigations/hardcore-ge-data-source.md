@@ -187,7 +187,7 @@ Dependencies, to justify in #18: `reqwest` (rustls, JSON off; parse with `serde_
 
 The client in `src/market/` follows the sketch above with these differences:
 
-- Prices use the module's own `Price` (whole GP) and `AveragePrice` (hundredths of a GP) rather than `profit::Gp`, to keep the client independent of #14. Conversion between them is left to the caller that joins them.
+- Item ids, prices, average prices and timestamps use the shared `domain` types (`ItemId`, `Price`, `AveragePrice`, `UnixSeconds`, from #39), not definitions of this module. The client does not convert prices to the signed `Gp` used by the profit primitives; `AveragePrice` has no conversion to a whole-GP price because rounding an average is an analysis decision.
 - `reqwest` 0.13 puts query-string support behind a feature, so query parameters are built with `Url::query_pairs_mut`.
 - The mapping response is parsed with only `id` and `name` required; the live check showed `limit`, `value`, `highalch` and `lowalch` can be absent, so the parser's choice is confirmed.
 - Fixtures in `tests/fixtures/hardcore_ge/` are partly synthetic; see the README there.

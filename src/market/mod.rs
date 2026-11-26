@@ -51,7 +51,6 @@ mod parse;
 pub use client::{ClientConfig, ConfigError, HARDCORE_BASE_URL, HardcoreClient};
 pub use error::{MarketDataError, TransportKind};
 pub use model::{
-    AveragePrice, Endpoint, Freshness, ItemId, ItemInfo, LatestPrices, Lookback, Observed, Price,
-    PriceWindow, Provenance, Series, SeriesPoint, SideStats, TimedPrice, UnixSeconds, WindowLength,
-    WindowStats, WorldType, classify_age,
+    Endpoint, Freshness, ItemInfo, LatestPrices, Lookback, Observed, PriceWindow, Provenance,
+    Series, SeriesPoint, SideStats, TimedPrice, WindowLength, WindowStats, WorldType, classify_age,
 };

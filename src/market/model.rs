@@ -1,31 +1,14 @@
 //! Typed results of Hardcore Grand Exchange queries.
 //!
-//! Units are explicit in the types: [`Price`] is whole GP, [`AveragePrice`] is
-//! hundredths of a GP (the API reports averages with up to two decimals), and
-//! [`UnixSeconds`] is seconds since the Unix epoch. Absent values are
-//! `Option`, never zero.
+//! Units are explicit in the shared [`crate::domain`] types: [`Price`] is whole
+//! GP, [`AveragePrice`] is hundredths of a GP (the API reports averages with up
+//! to two decimals), and [`UnixSeconds`] is seconds since the Unix epoch.
+//! Absent values are `Option`, never zero.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-/// An item identifier as used by the prices API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ItemId(pub u32);
-
-/// Seconds since the Unix epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct UnixSeconds(pub u64);
-
-/// A whole-GP price.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Price(pub u64);
-
-/// An average price in hundredths of a GP, so `227.22` is `AveragePrice(22722)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AveragePrice {
-    /// The average in hundredths of a GP.
-    pub hundredths: u64,
-}
+use crate::domain::{AveragePrice, ItemId, Price, UnixSeconds};
 
 /// The world type a result describes. There is no default and no fallback to
 /// another world type.

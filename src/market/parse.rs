@@ -20,10 +20,12 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 
+use crate::domain::{AveragePrice, ItemId, Price, UnixSeconds};
+
 use super::error::MarketDataError;
 use super::model::{
-    AveragePrice, Endpoint, ItemId, ItemInfo, LatestPrices, Price, PriceWindow, Series,
-    SeriesPoint, SideStats, TimedPrice, UnixSeconds, WindowStats,
+    Endpoint, ItemInfo, LatestPrices, PriceWindow, Series, SeriesPoint, SideStats, TimedPrice,
+    WindowStats,
 };
 
 /// A JSON object whose fields are still raw text.

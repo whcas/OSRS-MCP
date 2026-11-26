@@ -9,10 +9,12 @@ use reqwest::redirect::Policy;
 use reqwest::{Client, Url};
 use thiserror::Error;
 
+use crate::domain::{ItemId, UnixSeconds};
+
 use super::error::{MarketDataError, TransportKind};
 use super::model::{
-    Endpoint, ItemId, ItemInfo, LatestPrices, Lookback, Observed, PriceWindow, Provenance, Series,
-    UnixSeconds, WindowLength, WorldType,
+    Endpoint, ItemInfo, LatestPrices, Lookback, Observed, PriceWindow, Provenance, Series,
+    WindowLength, WorldType,
 };
 use super::parse;
 
@@ -102,7 +104,8 @@ pub enum ConfigError {
 ///
 /// ```no_run
 /// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
-/// use osrs_mcp::market::{ClientConfig, HardcoreClient, ItemId};
+/// use osrs_mcp::domain::ItemId;
+/// use osrs_mcp::market::{ClientConfig, HardcoreClient};
 ///
 /// let client = HardcoreClient::new(ClientConfig::default())?;
 /// let latest = client.latest(Some(ItemId(4151))).await?;
