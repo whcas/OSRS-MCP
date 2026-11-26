@@ -5,6 +5,8 @@
 - Start from the relevant GitHub issue; inspect acceptance criteria and existing code. Do not expand scope without approval.
 - Use a dedicated short-lived branch from current `main` (e.g. `feat/12-character-parser`). Never commit or push directly to `main`.
 - For non-trivial work, propose a plan and flag uncertain requirements before implementation.
+- Issue authors and coordinating agents should plan work around small, independently reviewable PRs. Identify natural delivery boundaries before assigning or implementing work; an issue may span multiple coherent PRs, each leaving the project functional and verified. Assess review complexity (responsibilities, decisions and behavioural changes), not raw diff size; distinguish implementation from tests, documentation and generated files.
+- Implementing agents should flag material scope growth and reassess delivery boundaries with the coordinator before continuing. Avoid oversized PRs, arbitrary line limits, artificial fragmentation and unnecessary dependencies between PRs. Never reduce test coverage to meet a size target.
 - Prefer TDD for business logic: define behaviour, write a failing test, implement, then refactor. For significant logic, obtain maintainer agreement on the expected behaviour before implementing.
 - Open a PR linked to the issue. Report assumptions, verification results and limitations. Do not merge PRs, change repository protections or deploy without explicit maintainer action.
 - Record significant architectural decisions in `docs/adr/`; avoid ADRs for routine implementation details.
@@ -61,5 +63,6 @@
 ## PR completion
 
 - Check the issue's acceptance criteria and keep unrelated changes out.
+- Authors and reviewers should assess whether the PR can be meaningfully reviewed as a coherent change. Explain unusually broad changes and propose a split when it would materially improve reviewability; do not require retrospective splitting merely to satisfy a size preference.
 - Summarise what changed, why, test evidence, assumptions and remaining limitations.
 - Human review is required before merge, even if automated checks and AI review pass.
