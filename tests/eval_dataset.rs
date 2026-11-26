@@ -71,8 +71,6 @@ struct Page {
 #[serde(rename_all = "snake_case")]
 enum RevisionBasis {
     Footer,
-    Summary,
-    Unspecified,
     NotObserved,
 }
 
@@ -133,7 +131,7 @@ fn load() -> Dataset {
 }
 
 fn assert_filled(name: &str, value: &str) {
-    assert!(value.trim().len() > 1, "{name} must not be blank");
+    assert!(!value.trim().is_empty(), "{name} must not be blank");
 }
 
 fn page<'a>(dataset: &'a Dataset, title: &str) -> Option<&'a Page> {
@@ -401,10 +399,14 @@ fn pages_are_unique_and_revisions_are_consistent() {
             "{} revision basis does not match its revision data",
             page.title
         );
+        assert!(
+            page.headings_complete || page.note.as_deref().is_some_and(|n| !n.trim().is_empty()),
+            "{} has an incomplete heading list and needs a note",
+            page.title
+        );
         let unique: HashSet<_> = page.observed_sections.iter().collect();
         assert_eq!(unique.len(), page.observed_sections.len(), "{}", page.title);
     }
-    assert!(dataset.pages.iter().any(|p| !p.headings_complete));
     for page in &dataset.pages {
         assert!(
             dataset

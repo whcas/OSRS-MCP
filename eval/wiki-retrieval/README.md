@@ -12,7 +12,7 @@ No retrieval engine, index or Wiki download exists yet, so this directory holds 
 | `README.md` | This document: format, metrics, procedure, limitations |
 | `../../tests/eval_dataset.rs` | Offline structural checks, run by `scripts/check.sh` |
 
-Dataset content is original: query wording is written for this project, and the references are page titles, section heading names and revision identifiers. No Wiki prose is copied, which keeps the file clear of share-alike questions (see the [acquisition investigation](../../docs/investigations/wiki-acquisition.md), if merged, and issue #6). No personal data or account exports are included.
+Dataset content is original: query wording is written for this project, and the references are page titles, section heading names and revision identifiers. No Wiki prose is copied, which keeps the file clear of share-alike questions (see [issue #6](https://github.com/whcas/OSRS-MCP/issues/6) on Wiki acquisition and licensing). No personal data or account exports are included.
 
 ## Format (`format_version` 1)
 
@@ -37,8 +37,8 @@ Top-level fields:
 | `title` | Canonical page title after redirects, as observed |
 | `requested_as` | Redirect source titles that were requested and resolved to this page |
 | `oldid`, `last_modified` | Permanent revision id and date, both `null` when not observed |
-| `revision_basis` | Where the revision came from: `footer` (page footer), `summary` (fetch-tool summary), `unspecified`, or `not_observed` |
-| `headings_complete` | `true` if the full heading list was seen; `false` if the page body was only partly read |
+| `revision_basis` | `footer` if `oldid` and `last_modified` were read from the page footer text, otherwise `not_observed`. Revision ids reported only by a summarising fetch tool are deliberately **not** recorded, because such tools can get them wrong |
+| `headings_complete` | `true` if the page's whole heading list was seen; `false` if only part of it was. This describes the page, whereas `references` (below) describes the judged sections only |
 | `observed_sections` | Section paths seen on the page |
 | `note` | Optional caveat |
 
@@ -63,7 +63,7 @@ A **section path** is heading texts from the top level down, joined by ` > `, fo
 
 **Two separate checks.** Existence and relevance are tracked apart because they have different evidence:
 
-- `references` records whether the page and section **exist**. `verified` means every judged page and section heading was observed; `partial` means some headings were only read from a tool summary or the page body was only partly read; `unverified` means none could be observed.
+- `references` records whether the page and section **exist**. `verified` means every judged page and section heading was seen in the page's verbatim contents block, even if the page's full heading list was not (`headings_complete: false`); `partial` means some judged headings were only inferred from a tool summary; `unverified` means none could be observed. For pages with `revision_basis: not_observed` (most of them), "verified" says the headings existed on the observation date, not which revision they came from.
 - `relevance` records whether the **grades are right**. Every grade in the current dataset is `provisional`: it is the author's judgement from page and section titles, and no section text has been read or reviewed by a person. `reviewed` is reserved for a query whose grades a human has checked against the section text (none yet). `ambiguous` means several answers are defensible or the answer lies in pages not checked. `unresolved` means no reference could be established.
 
 Provisional grades are not verified ground truth. Do not describe a score computed from them as a measure of correctness.
@@ -99,6 +99,7 @@ Report results for the `hardcore_worlds` queries separately, as well as overall,
 A retrieval result is `(page, section path)`, with the page title resolved through redirects to the canonical title in the dataset.
 
 - **Section match:** the result matches a judgement if it is on the same page and its section path equals the judged path or is a descendant of it. A judgement whose `section` is `null` matches any section of that page.
+- **Whole-page judgements.** A judgement whose `section` is `null` is satisfied by any section of that page, so section recall on a query whose grade-2 judgements are all page-level is effectively page recall. Leave such queries out of section-level aggregates and report them at page level only.
 - **Page match:** the result is on the same page as the judgement, regardless of section. Use this for engines that return whole pages.
 - A result that is an ancestor of the judged section (a larger chunk containing it) counts as a page match only.
 - **No double counting.** Judgements in a query never overlap (checked by the tests), so a result matches at most one judgement. A judgement is satisfied once, however many results match it: several chunks from the same section count as one hit for recall. Duplicate results still occupy ranks, so they lower the rank of everything behind them.
@@ -188,7 +189,7 @@ Because the Wiki changes with game updates, a judged section may be renamed or r
 - Add queries with a new `qNNN` id; do not renumber or repurpose ids. Increase `dataset_version` (minor for additions, major when existing meanings change).
 - Record every judged page in `pages` with the title observed after redirects, and every judged section in `observed_sections`. If a section cannot be observed, set the query's `references` to `partial` or `unverified` (and `relevance` to `unresolved` if no reference exists) and explain why in `notes`. Grades start as `provisional`; use `reviewed` only after a person has read the section text.
 - Keep text short and original. Do not paste Wiki text into any field. The structural test rejects fields longer than 500 characters.
-- Check references through the live Wiki only in small numbers, with a descriptive User-Agent and no bulk fetching, and follow the open permission question in the acquisition investigation.
+- Check references through the live Wiki only in small numbers, with a descriptive User-Agent and no bulk fetching, and follow the open permission question in [issue #6](https://github.com/whcas/OSRS-MCP/issues/6).
 
 ## Limitations
 
@@ -197,6 +198,7 @@ Because the Wiki changes with game updates, a judged section may be renamed or r
 - **Grades are provisional.** They come from page and section titles. No section text was read or human-reviewed, so a high score may reflect the author's title-based guesses. Some page headings were also observed only partially (see `references: partial` and `headings_complete`).
 - **Heading text drifts.** Section identity is heading text, which edits can change. Revision fields help but cover only some pages (`oldid` is `null` for several).
 - **Observed through a model-assisted fetch tool**, not by reading raw pages in a browser; re-verify before relying on any single reference.
+- **Relevance is not safety.** Grades measure whether a section is relevant to a query. Some relevant sections describe risky options (for example `q017` lists a Wilderness course as grade 2). Nothing here implies that retrieval should rank safe options first; advice on risk belongs to the advisor and the account's constraints.
 - **Time-sensitive content.** Game updates change both pages and the right answers (for example, rates, requirements and prices).
 - **No Hardcore Worlds economy reference.** The Hardcore Worlds page has no heading devoted to the economy, and no other page was identified (`q025`), so that area cannot be scored from the Wiki.
 - **Small mode-specific subset.** Only five queries concern Hardcore Worlds, and their grades rest on section titles. The Hardcore Worlds page is recent and may change quickly.

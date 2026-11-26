@@ -24,9 +24,9 @@
       "requested_as": [
         "Hardcore main"
       ],
-      "oldid": 15415136,
-      "last_modified": "2026-11-25",
-      "revision_basis": "summary",
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
       "headings_complete": true,
       "observed_sections": [
         "Getting started",
@@ -42,7 +42,7 @@
         "See also",
         "See also > Newsposts"
       ],
-      "note": "Contents block read verbatim; the page body was only partly read. Revision data came from a fetch-tool summary that was inconsistent with the verbatim text, so treat it as unverified. No heading is devoted to the economy."
+      "note": "Contents block read verbatim; the page body was only partly read. A revision id reported by a fetch-tool summary was inconsistent with the verbatim text and is not recorded. No heading is devoted to the economy."
     },
     {
       "title": "Fairy ring",
@@ -69,9 +69,9 @@
       "requested_as": [
         "Hardcore Ironman"
       ],
-      "oldid": 15389053,
-      "last_modified": "2026-11-01",
-      "revision_basis": "summary",
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
       "headings_complete": true,
       "observed_sections": [
         "Restrictions",
@@ -187,9 +187,9 @@
     {
       "title": "Venom",
       "requested_as": [],
-      "oldid": 15403615,
-      "last_modified": "2026-11-16",
-      "revision_basis": "unspecified",
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
       "headings_complete": true,
       "observed_sections": [
         "Venom damage",
@@ -205,9 +205,9 @@
     {
       "title": "Poison",
       "requested_as": [],
-      "oldid": 15409179,
-      "last_modified": "2026-11-19",
-      "revision_basis": "summary",
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
       "headings_complete": true,
       "observed_sections": [
         "Mechanics",
@@ -302,9 +302,9 @@
     {
       "title": "Fairytale II - Cure a Queen",
       "requested_as": [],
-      "oldid": 15372454,
-      "last_modified": "2026-10-14",
-      "revision_basis": "summary",
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
       "headings_complete": false,
       "observed_sections": [
         "Details",
@@ -316,7 +316,8 @@
         "Music",
         "Changes",
         "Trivia"
-      ]
+      ],
+      "note": "Walkthrough sub-headings were only partly read from a fetch-tool summary."
     },
     {
       "title": "Pay-to-play Prayer training",
@@ -339,9 +340,9 @@
     {
       "title": "Agility training",
       "requested_as": [],
-      "oldid": 15369875,
-      "last_modified": "2026-10-10",
-      "revision_basis": "summary",
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
       "headings_complete": false,
       "observed_sections": [
         "Fastest experience",
@@ -371,9 +372,9 @@
     {
       "title": "Skull (status)",
       "requested_as": [],
-      "oldid": 15409474,
-      "last_modified": "2026-11-19",
-      "revision_basis": "summary",
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
       "headings_complete": true,
       "observed_sections": [
         "Mechanics",
@@ -415,9 +416,9 @@
       "requested_as": [
         "Safespotting"
       ],
-      "oldid": 15168074,
-      "last_modified": "2026-04-07",
-      "revision_basis": "unspecified",
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
       "headings_complete": true,
       "observed_sections": [
         "Notable safespots",
