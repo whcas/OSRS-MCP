@@ -1,6 +1,6 @@
 # ADR-0002: Build the Wiki corpus from manually exported XML
 
-- Status: Proposed
+- Status: Accepted for the acquisition decision (manual `Special:Export` XML as the MVP input, selected by the maintainer in issue #6). The licensing, reuse, attribution and hosted-model questions listed under Consequences remain open and are not accepted by this ADR.
 - Date: 2026-11-26
 - Related issues or PRs: #6 (decision), #22 (investigation), #16 and #37 (evaluation), #32 to #36 (implementation)
 
@@ -13,7 +13,8 @@ Retrieval needs OSRS Wiki sections with provenance. The host's Terms of Use proh
 - The MVP corpus comes from **human-selected, manually downloaded `Special:Export` XML files** (current revision by default), imported locally and offline. The application and its agents do not fetch Wiki pages, automate the export form, crawl or contact the operator.
 - Store each page revision with its page id, namespace, title, revision id, timestamp and content hash, and split it into sections for retrieval with the provenance needed for attribution.
 - Keep raw wikitext. Do not try to render MediaWiki initially. Mark unexpanded templates and tables rather than hiding them.
-- Record missing redirect targets, templates and requested pages explicitly, and keep a persistent, deduplicated, paste-ready list of titles for the human to export. Request only relevant missing knowledge, not links recursively.
+- Record missing redirect targets, templates and requested pages explicitly, and keep a persistent, deduplicated, paste-ready list of titles for the human to export. Titles enter the list only through an explicit local request action (CLI, or an MCP tool that is off by default, annotated as not read-only and enabled by the user); search, retrieval and import never write to it. Request only known, relevant missing pages, not links recursively.
+- A section that is only unexpanded template markup in an already imported article is a rendering limitation, not a missing page. It is reported as unsupported content, and exporting the same article again does not resolve it. Only a specific missing template or page that is known to be relevant is requested.
 - Evaluation reports corpus coverage separately from ranking quality (see #16 and #37).
 - Exports and raw Wiki text stay out of Git. Tests use synthetic fixtures with their own ground truth.
 
