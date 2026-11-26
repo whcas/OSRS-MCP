@@ -11,7 +11,15 @@ all-features = true
 # yanked versions. Add exceptions here only with a reason and a linked issue.
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+# Maintainer-approved exception (decision recorded in issue #23, 2026-11-26),
+# limited to this one advisory: RUSTSEC-2026-0543 reports chrono as
+# unmaintained, with no safe upgrade. chrono is a mandatory dependency of
+# rmcp 3.x (locked at chrono 0.4.45) and cannot be disabled through features.
+# This is not an approval of any other advisory. Revisit on every rmcp upgrade
+# and remove the entry once chrono is no longer in the dependency tree.
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained via rmcp; accepted by the maintainer in #23" },
+]
 
 [bans]
 multiple-versions = "warn"
