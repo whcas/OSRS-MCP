@@ -57,6 +57,7 @@ One procedure, run by a maintainer from a normal machine. Nothing here is run by
    - Sends six sequential GET requests two seconds apart: `mapping`, `latest?id=4151`, `5m`, `1h` and `timeseries?id=4151&lookback=24h` on `osrs-hc`, plus one `latest?id=4151` on the standard `osrs` path for comparison only.
    - Uses the same User-Agent format as the Rust client's default, `osrs-mcp/<Cargo version> (+https://github.com/whcas/OSRS-MCP)`, with a 30 s timeout and an 8 MiB body cap. It writes nothing to disk.
    - `python3 scripts/verify_hardcore_api.py --self-test` checks the summariser offline.
+   - macOS on Apple Silicon: `python3` (3.8 or newer; the script is tested against 3.13) comes with the Xcode Command Line Tools (`xcode-select --install`) or Homebrew, and `curl` is built in. Run from a terminal at the repository root. No other tools or packages are needed.
 2. Expected output: each request reports status 200, then headers (record `Cache-Control`, `Date`, `Last-Modified` and any rate-limit headers, none of which have been observed yet), then a compact schema summary. Final line `6/6 requests verified`.
 3. Compare against this document and fix anything that differs: field names and types, `1h`'s top-level `timestamp`, which `mapping` fields can be absent, and the semantic checks the script prints (null averages with non-zero volume, averages with more than two decimals, timestamp multiples of 300 and 3600).
 4. A non-200 status (for example 403 for a blocked User-Agent, or 429) is itself a result: record it, do not retry in a loop.
