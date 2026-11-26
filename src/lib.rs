@@ -3,6 +3,7 @@
 //! Domain logic lives here, independent of any transport. The binary in
 //! `src/main.rs` is a thin adapter over this crate.
 
+pub mod mcp;
 pub mod profit;
 
 /// Static build metadata for this crate.
