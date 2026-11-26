@@ -4,6 +4,7 @@
 //! `src/main.rs` is a thin adapter over this crate.
 
 pub mod market;
+pub mod mcp;
 
 /// Static build metadata for this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
