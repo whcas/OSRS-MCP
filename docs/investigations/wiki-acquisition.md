@@ -101,16 +101,15 @@ When Wiki content is sent to a hosted LLM through MCP, the model provider receiv
 
 ## Recommendation
 
-1. **Input:** human-selected, manually downloaded `Special:Export` XML (option G), current revision by default. Files go in an ignored local directory (see `.gitignore`); nothing from them is committed.
-2. **Import:** an offline importer reads the XML and stores each page revision with its page id, namespace, title, revision id, timestamp and content hash. Re-importing the same revision is a no-op, a newer revision of the same page replaces the current one and keeps the old revision id, and unknown or absent fields are recorded as absent, not guessed. The importer never fetches anything.
-3. **Redirects, templates and links are explicit.** A redirect whose target is not in the corpus is stored as a redirect with a *missing target*, not dropped and not silently resolved. The same applies to templates and pages that other pages refer to. Do not try to fully render MediaWiki initially: keep raw wikitext, split on headings, and keep tables and unexpanded template calls as they appear, marked as such.
-4. **Retrieval:** section-aware keyword retrieval over what has been imported (see the indexing section), returning a bounded number of sections with provenance. Results and tool output say when relevant knowledge is missing from the corpus.
-5. **Demand-driven requests:** a relevant missing page (a redirect target, a template that a section depends on, a page a user asked about) is added to a **persistent, deduplicated request list** only through an **explicit local request action**: a CLI command, or an MCP tool that is disabled by default, annotated as not read-only and enabled by the user (issues #35 and #36). Read-only search and retrieval have no hidden side effects, and neither they nor import ever add new requests: they can report what is missing, but only an explicit request action enqueues a title. A successful import may transactionally reconcile the list by marking matching existing requests satisfied (including a refresh request once an adequate revision arrives), as #35 specifies. The list is paste-ready for the human, one title per line, and records why each title was requested. Request only known, relevant missing pages, not every link recursively. The human decides what to export and when. The application only produces the list.
-6. **Provenance and attribution:** every returned section carries its page title, section path, page and revision ids, timestamp and a link to the source page, so attribution is possible later.
-7. **Boundaries:** no automatic Wiki requests, no automation of the export form, no crawling, no contact with the operator, no real Wiki text or exports in Git, fixtures or tests, and no bundled Wiki data in releases.
-8. **Before using a real corpus:** verify the applicable terms (reuse, attribution, ShareAlike, private indexing and excerpts sent to hosted models), and get approval before any new external transfer or redistribution. Manual export is not blanket consent for any of these.
-9. **Synthetic work proceeds independently.** The importer, section splitter, storage and retrieval can be built and tested against small **synthetic** XML that mimics the observed structure, with its own hand-written ground truth. Synthetic scores say nothing about real Wiki retrieval quality. The #16 benchmark refers to real pages and is run against a real corpus only on an opt-in basis, subject to the permissions above.
-10. **Parked:** automated acquisition through the MediaWiki API, requests for dumps, and any message to Weird Gloop. The draft below is kept for the maintainer's use and has **not** been sent. Do not block the MVP on these.
+The decision itself is recorded in [ADR-0002](../adr/0002-manual-wiki-export-corpus.md): the corpus comes from human-selected, manually downloaded `Special:Export` XML, current revision by default, kept in an ignored local directory (`/wiki-dump/` or `/data/` in `.gitignore`) and imported offline. The application and its agents never fetch Wiki pages, automate the export form, crawl or contact the operator, and nothing from an export is committed. What follows adds only the reasoning and conditions that are not in the ADR.
+
+1. **Why this input.** It avoids engaging the automated-use clause, needs only an offline importer, and the sample already shows what the corpus looks like (page and revision metadata, raw wikitext, explicit redirects, nested templates, unexpanded generated tables). The cost is human effort and incomplete, snapshot coverage.
+2. **Missing material is visible.** Missing redirect targets, templates and pages are reported, never hidden or silently resolved, and raw wikitext is kept rather than rendered. A `template_only` section in an already imported article is a rendering limitation, so exporting that article again does not fix it.
+3. **Requests stay explicit.** Titles reach the paste-ready request list only through an explicit local action, never from search, retrieval or import; an import may mark existing requests satisfied. The behaviour is specified in #35 and #36.
+4. **Provenance.** Every returned section carries page title, section path, page and revision ids, timestamp and a source link, so attribution is possible later.
+5. **Before using a real corpus:** verify the applicable terms (reuse, attribution, ShareAlike, private indexing and excerpts sent to hosted models), and get approval before any new external transfer or redistribution. Manual export is not blanket consent for any of these.
+6. **Synthetic work proceeds independently.** The importer, section splitter, storage and retrieval can be built and tested against small **synthetic** XML that mimics the observed structure, with its own hand-written ground truth. Synthetic scores say nothing about real Wiki retrieval quality. The #16 benchmark refers to real pages and is run against a real corpus only on an opt-in basis, subject to the permissions above.
+7. **Parked:** automated acquisition through the MediaWiki API, requests for dumps, and any message to Weird Gloop. The draft below is kept for the maintainer's use and has **not** been sent. Do not block the MVP on these.
 
 Implementation is tracked separately: #32 (offline XML importer), #33 (section-aware wikitext preparation), #34 (local storage and keyword retrieval), #35 (demand-driven manual request queue), #36 (MCP tools, read-only by default) and #37 (coverage-aware retrieval evaluation). This pull request stays documentation only.
 
@@ -131,47 +130,21 @@ This text is for the maintainer if they decide to contact the operator later. **
 
 If automated access is ever approved, these constraints would apply: a descriptive User-Agent with a contact route chosen by the maintainer, serial requests, batched titles, `maxlag`, a generous delay, a hard daily request budget, an off switch, bounded responses with backoff on errors, incremental refresh by comparing revision ids, and never fetching at query time from an LLM request.
 
-## Proposed section-aware indexing from imported exports (design only, nothing is built)
+## Indexing observations from the sample
 
-**Unit of retrieval:** a section, identified by its heading path within a page, not a whole page and not an arbitrary fixed-size window.
+The design belongs in #33 (section preparation) and #34 (storage and search); only what the sample and the project rules imply is recorded here.
 
-**Fields stored per section:**
-
-| Field | Purpose |
-| --- | --- |
-| `page_title`, `page_id`, `namespace` | Stable identity, with redirects stored as aliases of the target title |
-| `section_path` (for example `["Strategies", "Safespotting"]`) and `section_anchor` | Human-readable and linkable section identity |
-| `revision_id`, `revision_timestamp`, `content_hash` | Provenance of exactly what was imported, taken from the export |
-| `imported_at`, `source_file_id` | Freshness and which export file supplied it. Missing or stale values stay distinguishable, per the project rules |
-| `source_url` | Page URL with the section anchor, and a revision permalink, for attribution |
-| `text` | Section text as wikitext, with markup stripped only for the searchable form |
-| `kind` | Prose, table, list or `template_only`, so tables and unexpanded template content are not flattened into noise or presented as complete |
-
-**Content form:** the export supplies raw wikitext, so retrieval works on wikitext split at headings. The observed export contains nested templates, inline tables and dynamically generated tables that are not expanded. The importer should keep them as found and mark them (`kind`), not pretend they are rendered. A section that is only a template call is `template_only`, and a result that includes one says so. This is a rendering limitation of an article that is already imported, so exporting the same article again does not fix it; it is reported as unsupported content, and a title is requested only when a specific missing template or page is known to be relevant. Extracting structured facts (shops, requirements, drops) is a separate workstream and should not be derived from retrieval text.
-
-**Missing material is a first-class state.** The corpus records three kinds of absence, each reported to callers and each able to feed the request list: a redirect whose target is not imported, a template or module referred to but not imported, and a page that was asked about but not imported. Retrieval results never imply that absent knowledge does not exist.
-
-**Demand-driven request list:** persistent across runs, deduplicated by normalised title (including redirect sources), with the reason and first-requested date for each entry, and with titles removed once imported. It is plain text, one title per line, ready to paste into the export form's page box. The form's exact input format has not been verified in this investigation and should be confirmed by the maintainer. The list never triggers a request.
-
-**Index:** start with keyword retrieval (title and heading boost plus full text, for example SQLite FTS5, noted as an option only because the README lists SQLite as a proposed direction). Add embeddings only if an evaluation on a permitted real corpus (the #16 benchmark, with the coverage-aware reporting from #37) shows keyword retrieval misses queries that matter, as the README principle says. Redirects and page titles give exact-name matching for free.
-
-**Tool-facing behaviour (for later):** return a bounded number of sections with their provenance, and treat all returned text as untrusted data, per AGENTS.md.
-
-**Coverage questions to measure on a permitted sample:** how many redirect targets and templates are missing after a typical selection, how much relevant content sits in unexpanded templates and tables, how large a useful corpus is, and how stale current-revision exports become between game updates.
+- **Unit of retrieval:** a section, identified by its heading path within a page.
+- **Provenance per section:** page title, page id, namespace, revision id and timestamp, content hash, import time, a source link and an attribution-ready permalink. Missing or stale values stay distinguishable, per the project rules.
+- **Content form:** raw wikitext split at headings, with tables and unexpanded template calls kept as found and marked rather than presented as rendered. Extracting structured facts (shops, requirements, drops) is a separate workstream.
+- **Missing material is a first-class state:** an unimported redirect target, template or page is reported to callers and can be requested explicitly; retrieval never implies that absent knowledge does not exist.
+- **Request list:** persistent, deduplicated by normalised title, one title per line for the export form. The form's exact input format is unverified and should be confirmed by the maintainer.
+- **Index:** start with keyword retrieval (SQLite FTS5 is an option, noted because the README lists SQLite as a proposed direction). Add embeddings only if an evaluation on a permitted real corpus shows keyword retrieval misses queries that matter.
+- **To measure on a permitted sample:** how many redirect targets and templates are missing after a typical selection, how much relevant content sits in unexpanded templates, how large a useful corpus is, and how stale current-revision exports become.
 
 ## Sample retrieval evaluation
 
-A retrieval evaluation is proposed rather than run, because no retrieval engine exists and no permitted real corpus exists. [#16](https://github.com/whcas/OSRS-MCP/issues/16) (PR #27) defines the Wiki-based dataset, metrics and procedure, and #37 tracks a coverage-aware scorer. The corpus now grows incrementally from manual exports, so evaluation must separate two things that look alike in a plain score:
-
-- **Corpus coverage:** whether the expected page and section were actually imported, whether a redirect target is present, and whether the expected content exists only in unexpanded templates.
-- **Ranking quality over available material:** whether the engine ranks the expected sections well when they are present.
-
-A judged section that is missing from the corpus is a coverage gap, not a ranking failure, and must be reported as such (never dropped silently and never counted as a ranking success). Two kinds of evaluation are kept apart:
-
-- **Real Wiki benchmark (#16):** judged against real Wiki pages and sections, run only as an opt-in against a real corpus, subject to the permissions above. It measures retrieval on real content.
-- **Synthetic fixtures:** invented pages with their own hand-written expected sections. They test the importer, splitter and index offline, in CI, with no Wiki content. They do not measure real retrieval quality and must not reuse the #16 references.
-
-For this investigation the evidence is limited to a handful of article titles checked for existence through the fetch tool, recorded in the #16 dataset with their observation date. The acquisition options above are **not** benchmarked.
+Nothing was run: no retrieval engine and no permitted real corpus exist. The [#16](https://github.com/whcas/OSRS-MCP/issues/16) dataset (PR #27) and the scorer tracked in #37 separate corpus coverage from ranking quality, so a judged section missing from the corpus is reported as a coverage gap rather than a ranking failure. The real-Wiki benchmark runs only as an opt-in against a permitted real corpus; synthetic fixtures test mechanics offline with their own ground truth. The acquisition options above are not benchmarked.
 
 ## Cost and trade-off summary
 
