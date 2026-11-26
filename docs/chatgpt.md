@@ -144,3 +144,11 @@ restriction encountered.
 
 - **ChatGPT desktop app as a Codex host.** Installed and signed in on the maintainer's Mac. It reads the shared Codex configuration, so registering the server in `~/.codex/config.toml` should make it available there, but that edit changes the maintainer's configuration and was not made. The app's own UI (does it list the server, does it prompt, does `server_info` return) needs a person at the app.
 - **Actual ChatGPT Project.** No custom tool or plugin addition was attempted. Per the sections above, a stdio server cannot be used there; whether the maintainer's plan allows any custom connector is a UI check, and any remote server would need explicit approval and new server work. A Codex result does not prove a Project result.
+
+### Permanent registration in Codex (2026-11-26)
+
+- Installed with `cargo install --locked --path .` from the #3 branch head, giving a stable binary at `~/.cargo/bin/osrs-mcp` (outside any worktree).
+- Registered with `codex mcp add osrs -- <home>/.cargo/bin/osrs-mcp serve` after backing up `~/.codex/config.toml`. Codex rewrote the file (entry order, `120` written as `120.0`), but a parsed comparison showed the only semantic change is the new `osrs` entry; existing entries are intact.
+- `codex mcp list` shows `osrs` enabled over stdio, and a `codex exec` run with **no overrides** called `server_info` through the registered entry and got the expected result.
+- Remove with `codex mcp remove osrs`. Rebuild and reinstall after pulling changes.
+- Because the ChatGPT desktop app shares this configuration, the app should now list the server; that is not yet confirmed in its UI.
