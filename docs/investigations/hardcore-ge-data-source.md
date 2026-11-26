@@ -115,6 +115,15 @@ Dependencies, to justify in #18: `reqwest` (rustls, JSON off; parse with `serde_
 - Parsing tested directly against fixtures; client behaviour tested against a local in-process HTTP server (status errors, timeouts, oversized body, wrong world path). CI makes no live requests.
 - An ignored, manually run test may hit the live API for contract drift checks; it is never part of `scripts/check.sh`.
 
+## Implementation notes (#18)
+
+The client in `src/market/` follows the sketch above with these differences:
+
+- Prices use the module's own `Price` (whole GP) and `AveragePrice` (hundredths of a GP) rather than `profit::Gp`, to keep the client independent of #14. Conversion between them is left to the caller that joins them.
+- `reqwest` 0.13 puts query-string support behind a feature, so query parameters are built with `Url::query_pairs_mut`.
+- The mapping response is parsed with only `id` and `name` required, because which fields can be absent was not verified.
+- Fixtures in `tests/fixtures/hardcore_ge/` are partly synthetic; see the README there.
+
 ## Trade-offs and recommendation
 
 - **For `osrs-hc`:** the only documented Hardcore source, same schema as standard, free and unauthenticated, cached, and explicitly supported by the wiki.
