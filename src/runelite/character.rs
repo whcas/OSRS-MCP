@@ -3,7 +3,8 @@
 //! Decisions are in `docs/research/runelite-export-formats.md`. In short:
 //! unknown fields are ignored, `boosted_level`, `session_id` and
 //! `account_name` are never read or retained, a level that disagrees with
-//! experience is a warning, and error values never contain input values.
+//! experience is a warning, and error values never contain input values apart
+//! from a skill name cut to [`MAX_NAME_CHARS`] characters.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -111,7 +112,8 @@ impl fmt::Display for SkillValueProblem {
 }
 
 /// Why `character.json` could not be imported. No variant carries an input
-/// value other than a skill name.
+/// value other than a skill name, which is cut to [`MAX_NAME_CHARS`]
+/// characters so that a hostile file cannot produce an unbounded diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CharacterParseError {
     /// The input ended inside a JSON value, or was empty. The plugin does not
@@ -268,7 +270,9 @@ fn read_skills(fields: &Fields) -> Result<Vec<SkillRecord>, CharacterParseError>
     let mut skills = Vec::with_capacity(entries.len());
     for (name, value) in &entries {
         if !seen.insert(name.as_str()) {
-            return Err(CharacterParseError::DuplicateSkill { name: name.clone() });
+            return Err(CharacterParseError::DuplicateSkill {
+                name: diagnostic_name(name),
+            });
         }
         skills.push(read_skill(name, value)?);
     }
@@ -293,6 +297,15 @@ fn read_skill(name: &str, value: &Value) -> Result<SkillRecord, CharacterParseEr
     })
 }
 
+/// The longest skill name, in characters, that an error will carry.
+const MAX_NAME_CHARS: usize = 64;
+
+/// A skill name as it may appear in an error: bounded, because the name comes
+/// from the file.
+fn diagnostic_name(name: &str) -> String {
+    name.chars().take(MAX_NAME_CHARS).collect()
+}
+
 /// The integer in `value`, which must be present and within `range`.
 fn read_integer<T>(
     skill: &str,
@@ -304,12 +317,12 @@ where
     T: TryFrom<u64> + PartialOrd,
 {
     let invalid = |problem| CharacterParseError::InvalidSkillValue {
-        skill: skill.to_owned(),
+        skill: diagnostic_name(skill),
         field,
         problem,
     };
     let value = value.ok_or_else(|| CharacterParseError::MissingSkillField {
-        skill: skill.to_owned(),
+        skill: diagnostic_name(skill),
         field,
     })?;
     let number = value
@@ -668,6 +681,20 @@ mod tests {
                 ),
                 "{level} {experience}"
             );
+        }
+    }
+
+    #[test]
+    fn skill_names_in_errors_are_bounded() {
+        let long = "x".repeat(1_000_000);
+        let missing = parse(&document("2026-01-01T00:00Z", &format!(r#""{long}":{{}}"#)));
+        let repeated = format!(
+            r#""{long}":{{"real_level":1,"experience":0}},"{long}":{{"real_level":1,"experience":0}}"#
+        );
+        let duplicate = parse(&document("2026-01-01T00:00Z", &repeated));
+        for error in [missing.unwrap_err(), duplicate.unwrap_err()] {
+            assert!(error.to_string().len() < 200, "{}", error.to_string().len());
+            assert!(format!("{error:?}").len() < 200);
         }
     }
 
