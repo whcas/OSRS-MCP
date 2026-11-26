@@ -50,7 +50,9 @@ protocol output isolated from diagnostics, and a first read-only tool.
 - rmcp's `#[tool_handler]` macro generates `async` trait methods without
   `.await`, which trips `clippy::unused_async_trait_impl`. A single narrow
   `#[expect]` with a reason covers the generated impl; the project's lint
-  baseline is otherwise unchanged.
+  baseline is otherwise unchanged. The maintainer accepted this expectation
+  and its scope on 2026-11-26; it becomes obsolete (and `#[expect]` will then
+  report it) if rmcp stops generating the lint.
 - Tools use the `#[tool]` macro; protocol types stay in `src/mcp.rs` so domain
   code does not depend on rmcp.
 - The dependency tree grows substantially; builds take longer.
