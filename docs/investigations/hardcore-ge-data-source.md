@@ -2,13 +2,13 @@
 
 - Issue: #13
 - Observation date: 2026-11-26
-- Status: Recommendation, pending maintainer review
+- Status: Recommendation, pending maintainer review. Live-verified from an unrestricted network on 2026-11-26 (see "Live verification result"); item-versus-transaction volume and the aggregate side semantics remain unverified.
 
 ## Summary
 
 Use the OSRS Wiki real-time prices API, **v2**, with the **`osrs-hc`** base path (`https://prices.runescape.wiki/api/v2/osrs-hc/`). It is documented as the Hardcore Worlds endpoint, and the sample responses differ from the standard `osrs` endpoint for the same item, so it is not an alias. No alternative Hardcore source was found. The data is thin: many items have a price on one side only, so missing values and low volumes must be first-class in the client (#18).
 
-## Method and limits of this verification
+## Method and limits (the original, restricted investigation)
 
 Direct HTTP requests from the development container were blocked by its egress proxy (`prices.runescape.wiki`, `oldschool.runescape.wiki` and `secure.runescape.com` all refused). The documentation and sample responses below were instead read through a web-fetch tool that returns page text and may truncate or summarise large bodies. Consequences:
 
@@ -117,7 +117,7 @@ Still **inferred or unknown**, not settled by this run: item versus transaction 
 
 - **Buy/sell:** `high` is the latest *instant-buy* price and `low` the latest *instant-sell* price. For `5m`, `1h` and `timeseries`, `avgHighPrice`/`highPriceVolume` and `avgLowPrice`/`lowPriceVolume` are the corresponding averages and reported volumes. The documentation states this mapping only for `latest`; applying it to the aggregates is an inference.
 - **Timestamps:** `highTime`/`lowTime` are Unix seconds of the trade. In `5m`/`1h` the timestamp is the **start** of the averaging block (so the block is only complete 5 minutes or 1 hour later). `timeseries` `timestep` is not guaranteed and may change.
-- **Volume windows:** 5 minutes, 1 hour, and per-step counts in `timeseries`. No other window is documented. Volumes are the reported counts per side, not GP value; whether a count is items or transactions is unknown (see "Verified versus inferred").
+- **Volume windows:** 5 minutes, 1 hour, and per-step values in `timeseries`; no other window is documented. Each is a reported volume per side (unit unverified: items or transactions are not distinguished), not a GP value.
 - **Numbers:** prices can exceed `i32`. Averages can have up to two decimal places (e.g. `227.22`).
 - **Missing values:** items never traded are absent from `latest`. A side never observed is `null` (for `latest`, both price and time). Aggregates use `null` average with volume `0`. Absent and `null` are different from a price of zero and must not be coerced.
 - **Freshness:** not conveyed by the API beyond the timestamps. Hardcore items can have a last trade days old (`highTime` for item 4151 was about 12 days earlier than the standard sample), so staleness must be computed by the client from timestamps against an explicit threshold.
@@ -129,9 +129,9 @@ Still **inferred or unknown**, not settled by this run: item versus transaction 
 - No numeric rate limit. Access may be restricted if usage "threatens the stability" of the API, described as multiple large queries per second sustained. Fetch `/latest` without `id` rather than looping, and avoid polling; the bulk endpoints are cached.
 - Content is CC BY-NC-SA 3.0 with additional terms; RuneScape marks belong to Jagex. No separate API attribution is stated. We should credit the OSRS Wiki as the source in tool output and docs, and not redistribute dumps of the data (also required by `AGENTS.md`).
 
-## Proposed minimal Rust client (for #18)
+## Proposed minimal Rust client (for #18): original sketch, superseded
 
-Keep it independent of MCP and persistence. Sketch only; names are open to review.
+This sketch predates the implementation and differs from it: prices and averages are unsigned (`u64`) types from `crate::domain` and are not converted to `Gp`, timestamps are `UnixSeconds`, and `Freshness` also has a `Future` variant. The implemented types and error model in `src/market` are the reference; keep this block only as the original proposal. Keep it independent of MCP and persistence.
 
 ```rust
 /// Chosen at construction; there is no default and no fallback.
