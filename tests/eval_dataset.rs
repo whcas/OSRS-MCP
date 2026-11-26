@@ -317,6 +317,14 @@ fn queries_needing_explanation_have_notes() {
             query.relevance
         );
     }
+}
+
+/// Scope check for the initial 0.1.0 benchmark only: it keeps one unresolved
+/// example (the Hardcore Worlds economy query) visible. Not a format rule.
+#[test]
+fn initial_benchmark_records_an_unresolved_example() {
+    let dataset = load();
+
     assert!(
         dataset
             .queries
@@ -327,7 +335,7 @@ fn queries_needing_explanation_have_notes() {
 }
 
 #[test]
-fn modes_are_declared_and_hardcore_worlds_is_the_focus() {
+fn query_modes_are_declared_and_contrast_queries_are_tagged() {
     let dataset = load();
 
     for query in &dataset.queries {
@@ -345,6 +353,14 @@ fn modes_are_declared_and_hardcore_worlds_is_the_focus() {
             );
         }
     }
+}
+
+/// Scope check for the initial 0.1.0 benchmark only: Hardcore Worlds is the
+/// project's target mode, so it must outnumber the Hardcore Ironman contrast
+/// queries. Later datasets may be composed differently.
+#[test]
+fn initial_benchmark_focuses_on_hardcore_worlds() {
+    let dataset = load();
     let worlds = dataset
         .queries
         .iter()
@@ -428,13 +444,9 @@ fn pages_are_unique_and_revisions_are_consistent() {
     }
 }
 
-/// Bounds the length of every free-text string in the dataset. This is a
-/// guard against pasted passages, not proof of provenance: a short string can
-/// still be copied text, so the dataset's originality is confirmed by manual
-/// review (see "Extending the dataset" in the README).
-#[test]
-fn every_free_text_string_is_length_bounded() {
-    let dataset = load();
+/// Every free-text string in the dataset, one schema level at a time. Kept
+/// explicit so that a new field has to be added here deliberately.
+fn free_text_fields(dataset: &Dataset) -> Vec<&str> {
     let mut fields: Vec<&str> = vec![
         &dataset.id,
         &dataset.version,
@@ -470,8 +482,18 @@ fn every_free_text_string_is_length_bounded() {
             fields.extend(judgement.section.as_deref());
         }
     }
+    fields
+}
 
-    for field in fields {
+/// Bounds the length of every free-text string in the dataset. This is a
+/// guard against pasted passages, not proof of provenance: a short string can
+/// still be copied text, so the dataset's originality is confirmed by manual
+/// review (see "Extending the dataset" in the README).
+#[test]
+fn every_free_text_string_is_length_bounded() {
+    let dataset = load();
+
+    for field in free_text_fields(&dataset) {
         assert!(
             field.chars().count() <= MAX_FIELD_CHARS,
             "field is too long: {field:.60}"
