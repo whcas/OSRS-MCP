@@ -147,15 +147,60 @@ Rankings below are invented to show the counting rules.
 
 **A result that is too coarse.** If an engine returns the whole page `Aggressiveness` as one result for `q009`, it is an ancestor of the judged sections: page recall counts it (1/1) and section recall does not (0/2).
 
+## Coverage-aware evaluation
+
+The real corpus is expected to grow incrementally from manually exported Wiki XML (see [issue #6](https://github.com/whcas/OSRS-MCP/issues/6) and the acquisition investigation in PR #22), so a judged page or section may simply not have been imported yet. A plain recall score would blame the engine for that. Evaluation therefore separates two questions:
+
+- **Corpus coverage:** was the expected page and section actually imported, is a redirect's target present, and is the expected content usable text rather than only unexpanded templates?
+- **Ranking quality over available material:** given that the expected material is in the corpus, does the engine rank it well?
+
+This dataset stays the same for every corpus. Availability is **computed by the scorer against a given corpus** and is never stored in the dataset.
+
+### Availability of a judgement
+
+For each judgement, the scorer assigns one state against the corpus under test:
+
+| State | Meaning |
+| --- | --- |
+| `available` | The page (after redirect resolution) is in the corpus and, for a section judgement, the section path is present with usable text |
+| `redirect_target_missing` | The expected title is a known redirect, but its target page was not imported |
+| `page_missing` | Neither the page nor a redirect to it was imported |
+| `section_missing` | The page was imported but the section path was not found, for example because of a renamed heading or a different revision |
+| `template_only` | The section exists, but its substance sits in unexpanded templates or dynamically generated tables that are not searchable text |
+| `unknown` | Availability cannot be determined (for example, the corpus carries no record of what was requested) |
+
+Rules:
+
+1. **Never drop an unavailable judgement silently**, and never count one as a ranking success. It stays in the denominator of every end-to-end figure.
+2. **Report three views side by side:**
+   - *Coverage:* grade-2 judgements that are `available`, divided by all grade-2 judgements, with a count for each unavailable state.
+   - *Conditional* recall@k, hit@k and MRR: computed over `available` grade-2 judgements only. A query with none available is left out of conditional figures and is counted in coverage.
+   - *End-to-end* recall@k, hit@k and MRR: computed over all grade-2 judgements, with unavailable ones counted as not satisfied and marked as caused by coverage, not ranking.
+3. **Report title resolution separately.** For queries that test names and redirects (category `exact_name`, tag `redirect`), report whether the title resolves to the canonical page, resolves only to a redirect with a missing target, or does not resolve. This is distinct from section results and from page-level deduplication, which follow the matching rules above.
+4. **Keep section and page levels apart.** A page can be available while one of its judged sections is not.
+5. **Produce a missing-material report:** the deduplicated list of titles behind every `redirect_target_missing`, `page_missing` and `template_only` state, one title per line, with no Wiki text. It may feed the demand-driven request list in the application, but the scorer only reports. It never fetches anything.
+6. **Keep provisional labels.** Coverage figures count grade-2 judgements, whose grades are provisional (see above), so every coverage, conditional and end-to-end figure is labelled provisional until the relevant queries are `reviewed`.
+7. **Say what the corpus is.** Every run records whether the corpus is `real` or `synthetic`. A synthetic corpus needs its own ground truth and must not reuse these references. Real-corpus scoring is opt-in and subject to the permissions that apply to using Wiki content; nothing here acquires pages automatically or sends excerpts to hosted models.
+
+### Coverage worked examples
+
+Rankings and corpora below are invented to show the counting rules.
+
+**Redirect target missing (`q009`).** The corpus has a redirect from `Aggression` but not its target page `Aggressiveness`. Both grade-2 judgements are `redirect_target_missing`. Coverage is 0/2. The query is left out of conditional recall. End-to-end recall@k is 0 for every k, and it is reported as a coverage gap, not a ranking failure. `Aggressiveness` appears in the missing-material report.
+
+**One page missing (`q004`).** The corpus has `Rune crossbow` but not `Armadyl crossbow`. Coverage is 1/2. If the engine returns `Rune crossbow > Comparison between other ranged weapons` at rank 1, conditional recall@3 is 1/1 = 1.0 and end-to-end recall@3 is 1/2 = 0.5. The gap between the two figures is the cost of missing material, not of ranking.
+
+**Template-only section.** A judged section exists, but its content is only a template call. It is `template_only`, so it counts against coverage even though the page was found, and it is listed in the missing-material report so the right template can be requested.
+
 ## Evaluation procedure
 
-1. Build or load the engine's index from a corpus whose revision or fetch date is recorded. Do not use the benchmark pages to tune the engine and then report the same queries as the result; keep a held-out split if tuning begins.
+1. Build or load the engine's index from a corpus whose kind (`real` or `synthetic`) and import date are recorded. Do not use the benchmark pages to tune the engine and then report the same queries as the result; keep a held-out split if tuning begins.
 2. Resolve each query's `query` text through the engine's public retrieval entry point, with a fixed result limit (use 10).
 3. Write a run file (below), including timing.
-4. Score with the rules above. Exclude `ambiguous` and `unresolved` queries, list them separately, and label every figure provisional while no query has `relevance: reviewed`.
+4. Score with the rules above. Assign an availability state to each judgement first, and report coverage, conditional and end-to-end figures together. Exclude `ambiguous` and `unresolved` queries, list them separately, and label every figure provisional while no query has `relevance: reviewed`.
 5. Record the engine version, the corpus date, the dataset version and the machine.
 
-Because the Wiki changes with game updates, a judged section may be renamed or removed. When a run reports a miss, check whether the judged section still exists in the corpus before treating it as a retrieval failure; update the dataset (new `dataset_version`) and keep the old query id's meaning unchanged.
+Because the Wiki changes with game updates, a judged section may be renamed or removed. A section that is absent from the corpus is reported as `section_missing`, not as a ranking failure. If it was renamed, update the dataset (new `dataset_version`) and keep the old query id's meaning unchanged.
 
 ### Run file (proposed, not yet consumed by any code)
 
@@ -163,7 +208,7 @@ Because the Wiki changes with game updates, a judged section may be renamed or r
 {
   "dataset_version": "0.1.0",
   "engine": "name and version",
-  "corpus": "revision or fetch date",
+  "corpus": { "kind": "real or synthetic", "id": "identifier", "imported_at": "date" },
   "results": [
     {
       "query_id": "q001",
@@ -176,7 +221,7 @@ Because the Wiki changes with game updates, a judged section may be renamed or r
 }
 ```
 
-`hits` are in rank order. This shape may change when the first engine and scorer exist; any change is recorded here.
+`hits` are in rank order. Availability states are not part of the run file: the scorer derives them from the corpus and reports them. This shape may change when the first engine and scorer exist (tracked in #37); any change is recorded here.
 
 ## How future implementations use the dataset
 
@@ -199,6 +244,7 @@ Because the Wiki changes with game updates, a judged section may be renamed or r
 - **Heading text drifts.** Section identity is heading text, which edits can change. Revision fields help but cover only some pages (`oldid` is `null` for several).
 - **Observed through a model-assisted fetch tool**, not by reading raw pages in a browser; re-verify before relying on any single reference.
 - **Relevance is not safety.** Grades measure whether a section is relevant to a query. Some relevant sections describe risky options (for example `q017` lists a Wilderness course as grade 2). Nothing here implies that retrieval should rank safe options first; advice on risk belongs to the advisor and the account's constraints.
+- **Coverage depends on manual selection.** Real-corpus results reflect which pages a human exported, and unexpanded templates and generated tables can hide content. That is why coverage is reported next to ranking quality, and a high conditional score with low coverage says little about the advisor as a whole.
 - **Time-sensitive content.** Game updates change both pages and the right answers (for example, rates, requirements and prices).
 - **No Hardcore Worlds economy reference.** The Hardcore Worlds page has no heading devoted to the economy, and no other page was identified (`q025`), so that area cannot be scored from the Wiki.
 - **Small mode-specific subset.** Only five queries concern Hardcore Worlds, and their grades rest on section titles. The Hardcore Worlds page is recent and may change quickly.
