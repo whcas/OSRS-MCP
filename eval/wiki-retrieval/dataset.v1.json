@@ -1,0 +1,1059 @@
+{
+  "format_version": 1,
+  "dataset_id": "osrs-wiki-retrieval",
+  "dataset_version": "0.1.0",
+  "created": "2026-11-26",
+  "source": {
+    "site": "https://oldschool.runescape.wiki",
+    "observed_on": "2026-11-26",
+    "method": "Page existence, redirects and headings read through a model-assisted fetch tool; relevance grades are author judgements from page and section titles, not from reading section text.",
+    "licence_note": "Contains only page titles, section heading names and revision identifiers from the OSRS Wiki, plus original queries. No Wiki prose is included."
+  },
+  "grades": {
+    "2": "Essential: the section directly answers the query.",
+    "1": "Useful: supporting or partial context."
+  },
+  "pages": [
+    {
+      "title": "Abyssal whip",
+      "requested_as": [],
+      "oldid": 15326130,
+      "last_modified": "2026-08-31",
+      "revision_basis": "summary",
+      "headings_complete": true,
+      "observed_sections": [
+        "Combat stats",
+        "Special attack",
+        "Upgrading",
+        "Products",
+        "Treasure Trails",
+        "Item sources",
+        "Sound effects",
+        "Used in recommended equipment",
+        "Changes",
+        "Trivia",
+        "References"
+      ]
+    },
+    {
+      "title": "Fairy ring",
+      "requested_as": [
+        "Fairy rings"
+      ],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": true,
+      "observed_sections": [
+        "Using fairy rings",
+        "Closest points of interest to fairy rings",
+        "Combinations",
+        "Overview",
+        "Changes",
+        "Gallery",
+        "Trivia",
+        "References"
+      ]
+    },
+    {
+      "title": "Ironman Mode",
+      "requested_as": [
+        "Hardcore Ironman"
+      ],
+      "oldid": 15389053,
+      "last_modified": "2026-11-01",
+      "revision_basis": "summary",
+      "headings_complete": true,
+      "observed_sections": [
+        "Restrictions",
+        "Restrictions > Ironman",
+        "Restrictions > Ultimate Ironman",
+        "Restrictions > Hardcore Ironman",
+        "Restrictions > Group Ironman Modes",
+        "Changes",
+        "Trivia"
+      ]
+    },
+    {
+      "title": "Rune crossbow",
+      "requested_as": [],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": true,
+      "observed_sections": [
+        "Combat stats",
+        "Creation",
+        "Products",
+        "Item sources",
+        "Item sources > Shop locations",
+        "Comparison between other ranged weapons",
+        "Treasure Trails",
+        "Used in recommended equipment",
+        "Changes",
+        "Trivia"
+      ]
+    },
+    {
+      "title": "Armadyl crossbow",
+      "requested_as": [],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": true,
+      "observed_sections": [
+        "Combat stats",
+        "Special attack",
+        "Products",
+        "Item sources",
+        "Sound effects",
+        "Comparison between other ranged weapons",
+        "Used in recommended equipment",
+        "Used in recommended equipment > Special attack",
+        "Gallery",
+        "Changes",
+        "Trivia",
+        "References"
+      ]
+    },
+    {
+      "title": "Prayer",
+      "requested_as": [],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": true,
+      "observed_sections": [
+        "Prayer points",
+        "Recharging points",
+        "Prayers list",
+        "Conflicting prayers",
+        "Prayer drain",
+        "Prayer drain > Prayer drain mechanics",
+        "Quick prayers",
+        "Prayer filtering",
+        "Prayer flicking",
+        "Prayer flicking > How to prayer flick",
+        "Prayer flicking > 1-tick prayer flicking",
+        "Equipment that affects Prayer",
+        "Monsters that use Prayer",
+        "Temporary boosts",
+        "Quests",
+        "Level up messages",
+        "Changes",
+        "Trivia",
+        "See also",
+        "References"
+      ]
+    },
+    {
+      "title": "Protect from Magic",
+      "requested_as": [],
+      "oldid": 15303753,
+      "last_modified": "2026-08-17",
+      "revision_basis": "footer",
+      "headings_complete": true,
+      "observed_sections": [
+        "Exceptions",
+        "Exceptions > PvM",
+        "Exceptions > PvP",
+        "Flicking",
+        "Changes",
+        "References"
+      ]
+    },
+    {
+      "title": "Protect from Missiles",
+      "requested_as": [],
+      "oldid": 15211299,
+      "last_modified": "2026-05-15",
+      "revision_basis": "footer",
+      "headings_complete": true,
+      "observed_sections": [
+        "Flicking",
+        "Changes",
+        "References"
+      ]
+    },
+    {
+      "title": "Venom",
+      "requested_as": [],
+      "oldid": 15403615,
+      "last_modified": "2026-11-16",
+      "revision_basis": "unspecified",
+      "headings_complete": true,
+      "observed_sections": [
+        "Venom damage",
+        "Curing venom",
+        "Weaponry that can inflict venom",
+        "Monsters susceptible or immune to venom",
+        "Notes",
+        "Changes",
+        "References"
+      ],
+      "note": "Four further h2 sections listing immune monsters are omitted from this list."
+    },
+    {
+      "title": "Poison",
+      "requested_as": [],
+      "oldid": 15409179,
+      "last_modified": "2026-11-19",
+      "revision_basis": "summary",
+      "headings_complete": true,
+      "observed_sections": [
+        "Mechanics",
+        "Curing poison",
+        "Weapon poisoning",
+        "Poisonous monsters",
+        "Notes",
+        "Changes",
+        "Trivia",
+        "References"
+      ]
+    },
+    {
+      "title": "Maximum melee hit",
+      "requested_as": [],
+      "oldid": 15382973,
+      "last_modified": "2026-10-26",
+      "revision_basis": "summary",
+      "headings_complete": true,
+      "observed_sections": [
+        "Calculating your maximum melee hit",
+        "Trivia",
+        "References"
+      ]
+    },
+    {
+      "title": "Special attacks",
+      "requested_as": [],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": true,
+      "observed_sections": [
+        "Energy",
+        "Mechanics",
+        "Non-combat special attacks",
+        "Combat special attacks",
+        "Temporary event-only special attacks",
+        "Changes",
+        "Trivia",
+        "See also"
+      ]
+    },
+    {
+      "title": "Aggressiveness",
+      "requested_as": [
+        "Aggression"
+      ],
+      "oldid": 15373608,
+      "last_modified": "2026-10-16",
+      "revision_basis": "footer",
+      "headings_complete": true,
+      "observed_sections": [
+        "Mechanics",
+        "Mechanics > Attack range",
+        "Mechanics > Aggression range",
+        "Mechanics > Hunt range",
+        "Notes"
+      ]
+    },
+    {
+      "title": "Grand Exchange",
+      "requested_as": [],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": true,
+      "observed_sections": [
+        "Transportation",
+        "Operation",
+        "Item sets",
+        "Pricing experts",
+        "Buy limits",
+        "Volume",
+        "Non-tradeable items",
+        "New account trade restrictions",
+        "Convenience fee and item sink",
+        "Ironman mode",
+        "Changes",
+        "Trivia",
+        "References"
+      ]
+    },
+    {
+      "title": "Dragon Slayer I",
+      "requested_as": [],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": false,
+      "observed_sections": [
+        "Details",
+        "Walkthrough",
+        "Walkthrough > Preparing for the fight",
+        "Walkthrough > Tips for the fight & potential strategies",
+        "Rewards",
+        "Required for completing",
+        "Transcript",
+        "Changes",
+        "Trivia",
+        "References"
+      ],
+      "note": "Headings from Walkthrough onward come partly from a fetch-tool summary."
+    },
+    {
+      "title": "Fairytale II - Cure a Queen",
+      "requested_as": [],
+      "oldid": 15372454,
+      "last_modified": "2026-10-14",
+      "revision_basis": "summary",
+      "headings_complete": false,
+      "observed_sections": [
+        "Details",
+        "Walkthrough",
+        "Walkthrough > Unlocking fairy rings",
+        "Rewards",
+        "Required for completing",
+        "Transcript",
+        "Music",
+        "Changes",
+        "Trivia"
+      ]
+    },
+    {
+      "title": "Waterfall Quest",
+      "requested_as": [],
+      "oldid": 15357907,
+      "last_modified": "2026-09-28",
+      "revision_basis": "summary",
+      "headings_complete": false,
+      "observed_sections": [
+        "Details",
+        "Walkthrough",
+        "Rewards",
+        "Required for completing",
+        "Transcript",
+        "Changes",
+        "Trivia"
+      ]
+    },
+    {
+      "title": "Pay-to-play Prayer training",
+      "requested_as": [
+        "Prayer training"
+      ],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": false,
+      "observed_sections": [
+        "Starting off",
+        "Active training",
+        "Passive training",
+        "Experience rates and cost",
+        "Quests for Prayer experience"
+      ],
+      "note": "The fetch-tool summary also listed headings that did not appear in the table of contents; they are omitted."
+    },
+    {
+      "title": "Pay-to-play Mining training",
+      "requested_as": [
+        "Mining training"
+      ],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": true,
+      "observed_sections": [
+        "Choosing a method",
+        "Equipment",
+        "Fastest experience",
+        "Other methods",
+        "Post 99",
+        "Ore table",
+        "Quests for Mining experience",
+        "References"
+      ]
+    },
+    {
+      "title": "Agility training",
+      "requested_as": [],
+      "oldid": 15369875,
+      "last_modified": "2026-10-10",
+      "revision_basis": "summary",
+      "headings_complete": false,
+      "observed_sections": [
+        "Fastest experience",
+        "Fastest experience > Levels 47–62: Wilderness Agility Course",
+        "Other methods",
+        "Other methods > Levels 1–99: Rooftop Agility Courses",
+        "References"
+      ],
+      "note": "Only the sub-sections used by the dataset are listed."
+    },
+    {
+      "title": "Death",
+      "requested_as": [],
+      "oldid": 15403323,
+      "last_modified": "2026-11-15",
+      "revision_basis": "footer",
+      "headings_complete": true,
+      "observed_sections": [
+        "Unsafe and safe deaths",
+        "Death animation",
+        "Self-inflicted lethal damage",
+        "Changes",
+        "Trivia",
+        "See also"
+      ]
+    },
+    {
+      "title": "Skull (status)",
+      "requested_as": [],
+      "oldid": 15409474,
+      "last_modified": "2026-11-19",
+      "revision_basis": "summary",
+      "headings_complete": true,
+      "observed_sections": [
+        "Mechanics",
+        "Skull types",
+        "Skull trickers",
+        "Revenants",
+        "Changes",
+        "Gallery",
+        "Trivia",
+        "See also",
+        "References"
+      ]
+    },
+    {
+      "title": "Wilderness",
+      "requested_as": [],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": false,
+      "observed_sections": [
+        "Transportation",
+        "History",
+        "Unique mechanics",
+        "Unique mechanics > Death mechanics",
+        "Player killing",
+        "Notable locations",
+        "Bosses",
+        "Skill training",
+        "Other features",
+        "Changes",
+        "See also",
+        "References"
+      ],
+      "note": "Contents block read; page body not read in full."
+    },
+    {
+      "title": "Safespot",
+      "requested_as": [
+        "Safespotting"
+      ],
+      "oldid": 15168074,
+      "last_modified": "2026-04-07",
+      "revision_basis": "unspecified",
+      "headings_complete": true,
+      "observed_sections": [
+        "Notable safespots",
+        "Safespotting in a PKing scenario",
+        "Edge of range",
+        "Kiting",
+        "Obstruction by another monster or player",
+        "Training combat from safespots",
+        "Other meaning",
+        "Changes",
+        "Trivia",
+        "References"
+      ]
+    },
+    {
+      "title": "Food",
+      "requested_as": [],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": true,
+      "observed_sections": [
+        "Popular foods",
+        "Fast foods",
+        "Blighted foods",
+        "Hunter meats",
+        "Inventory-blocking foods",
+        "Niche foods",
+        "Notes",
+        "Changes",
+        "See also"
+      ]
+    },
+    {
+      "title": "Money making guide",
+      "requested_as": [],
+      "oldid": null,
+      "last_modified": null,
+      "revision_basis": "not_observed",
+      "headings_complete": false,
+      "observed_sections": [
+        "Hourly profit table",
+        "Recurring methods",
+        "Stronghold of Security",
+        "Miscellaneous methods",
+        "See also"
+      ],
+      "note": "Body beyond the first part of the page was not read, so further headings may exist. Individual methods live on subpages that were not checked."
+    }
+  ],
+  "queries": [
+    {
+      "id": "q001",
+      "category": "exact_name",
+      "query": "abyssal whip",
+      "intent": "Bare item name; the page for the item is the answer.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Abyssal whip",
+          "section": null,
+          "grade": 2
+        }
+      ]
+    },
+    {
+      "id": "q002",
+      "category": "exact_name",
+      "query": "fairy rings",
+      "intent": "Plural form that must resolve through a redirect to the singular page title.",
+      "status": "verified",
+      "tags": [
+        "redirect"
+      ],
+      "judgements": [
+        {
+          "page": "Fairy ring",
+          "section": null,
+          "grade": 2
+        }
+      ]
+    },
+    {
+      "id": "q003",
+      "category": "exact_name",
+      "query": "hardcore ironman",
+      "intent": "Account-mode name that resolves through a redirect to a section of a broader page.",
+      "status": "verified",
+      "tags": [
+        "redirect",
+        "section_target"
+      ],
+      "judgements": [
+        {
+          "page": "Ironman Mode",
+          "section": "Restrictions > Hardcore Ironman",
+          "grade": 2
+        }
+      ]
+    },
+    {
+      "id": "q004",
+      "category": "multi_entity",
+      "query": "rune crossbow versus armadyl crossbow",
+      "intent": "Compare two named items; each item's comparison section is needed.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Rune crossbow",
+          "section": "Comparison between other ranged weapons",
+          "grade": 2
+        },
+        {
+          "page": "Armadyl crossbow",
+          "section": "Comparison between other ranged weapons",
+          "grade": 2
+        },
+        {
+          "page": "Rune crossbow",
+          "section": "Combat stats",
+          "grade": 1
+        },
+        {
+          "page": "Armadyl crossbow",
+          "section": "Combat stats",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q005",
+      "category": "multi_entity",
+      "query": "how do the two protection prayers against missiles and magic interact",
+      "intent": "Needs the rule about conflicting prayers plus the two prayer pages.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Prayer",
+          "section": "Conflicting prayers",
+          "grade": 2
+        },
+        {
+          "page": "Protect from Magic",
+          "section": null,
+          "grade": 1
+        },
+        {
+          "page": "Protect from Missiles",
+          "section": null,
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q006",
+      "category": "multi_entity",
+      "query": "venom versus poison, which is worse and how do I cure each",
+      "intent": "Two related status effects; both curing sections are needed.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Venom",
+          "section": "Curing venom",
+          "grade": 2
+        },
+        {
+          "page": "Poison",
+          "section": "Curing poison",
+          "grade": 2
+        },
+        {
+          "page": "Venom",
+          "section": "Venom damage",
+          "grade": 1
+        },
+        {
+          "page": "Poison",
+          "section": "Mechanics",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q007",
+      "category": "game_mechanic",
+      "query": "how do I calculate my max hit with melee",
+      "intent": "Formula page for a core combat mechanic.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Maximum melee hit",
+          "section": "Calculating your maximum melee hit",
+          "grade": 2
+        }
+      ]
+    },
+    {
+      "id": "q008",
+      "category": "game_mechanic",
+      "query": "how does special attack energy come back",
+      "intent": "Mechanic spread across a general page; energy section is the target.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Special attacks",
+          "section": "Energy",
+          "grade": 2
+        },
+        {
+          "page": "Special attacks",
+          "section": "Mechanics",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q009",
+      "category": "game_mechanic",
+      "query": "how far away do monsters notice me and attack",
+      "intent": "Natural-language phrasing for aggression ranges; the page title differs from the query words.",
+      "status": "verified",
+      "tags": [
+        "lexical_gap"
+      ],
+      "judgements": [
+        {
+          "page": "Aggressiveness",
+          "section": "Mechanics > Aggression range",
+          "grade": 2
+        },
+        {
+          "page": "Aggressiveness",
+          "section": "Mechanics > Hunt range",
+          "grade": 2
+        },
+        {
+          "page": "Aggressiveness",
+          "section": "Mechanics > Attack range",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q010",
+      "category": "game_mechanic",
+      "query": "what is prayer flicking",
+      "intent": "Concept that appears on the general prayer page and on individual prayer pages.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Prayer",
+          "section": "Prayer flicking",
+          "grade": 2
+        },
+        {
+          "page": "Protect from Magic",
+          "section": "Flicking",
+          "grade": 1
+        },
+        {
+          "page": "Protect from Missiles",
+          "section": "Flicking",
+          "grade": 1
+        },
+        {
+          "page": "Prayer",
+          "section": "Prayer drain",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q011",
+      "category": "game_mechanic",
+      "query": "how many of one item can I buy at the grand exchange in a window",
+      "intent": "Market limit mechanic; relevant to trading advice.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Grand Exchange",
+          "section": "Buy limits",
+          "grade": 2
+        }
+      ]
+    },
+    {
+      "id": "q012",
+      "category": "quest",
+      "query": "what should I prepare before fighting Elvarg",
+      "intent": "Quest preparation, with the boss name rather than the quest name in the query.",
+      "status": "partial",
+      "tags": [
+        "lexical_gap"
+      ],
+      "judgements": [
+        {
+          "page": "Dragon Slayer I",
+          "section": "Walkthrough > Preparing for the fight",
+          "grade": 2
+        },
+        {
+          "page": "Dragon Slayer I",
+          "section": "Walkthrough > Tips for the fight & potential strategies",
+          "grade": 1
+        }
+      ],
+      "notes": "Walkthrough headings were partly read from a fetch-tool summary."
+    },
+    {
+      "id": "q013",
+      "category": "quest",
+      "query": "how do I unlock fairy rings",
+      "intent": "Unlock condition lives on a quest page, not the fairy ring page.",
+      "status": "partial",
+      "tags": [
+        "cross_page"
+      ],
+      "judgements": [
+        {
+          "page": "Fairytale II - Cure a Queen",
+          "section": "Walkthrough > Unlocking fairy rings",
+          "grade": 2
+        },
+        {
+          "page": "Fairy ring",
+          "section": "Using fairy rings",
+          "grade": 1
+        }
+      ],
+      "notes": "Whether the fairy ring page itself states the unlock condition was not checked."
+    },
+    {
+      "id": "q014",
+      "category": "quest",
+      "query": "what rewards does Waterfall Quest give",
+      "intent": "Quest rewards section.",
+      "status": "partial",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Waterfall Quest",
+          "section": "Rewards",
+          "grade": 2
+        }
+      ],
+      "notes": "Page headings were read partly from a fetch-tool summary."
+    },
+    {
+      "id": "q015",
+      "category": "skilling",
+      "query": "fastest way to train prayer",
+      "intent": "Training guide; fastest-method sections are the target.",
+      "status": "verified",
+      "tags": [
+        "redirect"
+      ],
+      "judgements": [
+        {
+          "page": "Pay-to-play Prayer training",
+          "section": "Active training",
+          "grade": 2
+        },
+        {
+          "page": "Pay-to-play Prayer training",
+          "section": "Experience rates and cost",
+          "grade": 1
+        },
+        {
+          "page": "Pay-to-play Prayer training",
+          "section": "Passive training",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q016",
+      "category": "skilling",
+      "query": "mining training plan from level 1 to 99",
+      "intent": "Level-range training guide.",
+      "status": "verified",
+      "tags": [
+        "redirect"
+      ],
+      "judgements": [
+        {
+          "page": "Pay-to-play Mining training",
+          "section": "Fastest experience",
+          "grade": 2
+        },
+        {
+          "page": "Pay-to-play Mining training",
+          "section": "Other methods",
+          "grade": 1
+        },
+        {
+          "page": "Pay-to-play Mining training",
+          "section": "Equipment",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q017",
+      "category": "skilling",
+      "query": "agility training around level 50",
+      "intent": "Level-specific sections; more than one method is acceptable.",
+      "status": "partial",
+      "tags": [
+        "numeric_range"
+      ],
+      "judgements": [
+        {
+          "page": "Agility training",
+          "section": "Fastest experience > Levels 47–62: Wilderness Agility Course",
+          "grade": 2
+        },
+        {
+          "page": "Agility training",
+          "section": "Other methods > Levels 1–99: Rooftop Agility Courses",
+          "grade": 2
+        }
+      ],
+      "notes": "The best choice depends on account constraints; the Wilderness option is risky on a Hardcore account. Retrieval should surface both, and the advisor decides."
+    },
+    {
+      "id": "q018",
+      "category": "hardcore_safety",
+      "query": "what happens to my account when I die as a hardcore ironman",
+      "intent": "Core Hardcore rule.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Ironman Mode",
+          "section": "Restrictions > Hardcore Ironman",
+          "grade": 2
+        },
+        {
+          "page": "Death",
+          "section": "Unsafe and safe deaths",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q019",
+      "category": "hardcore_safety",
+      "query": "does venom keep getting stronger and can it kill me",
+      "intent": "Survival-relevant mechanic phrased as a worry.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Venom",
+          "section": "Venom damage",
+          "grade": 2
+        },
+        {
+          "page": "Venom",
+          "section": "Curing venom",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q020",
+      "category": "hardcore_safety",
+      "query": "what do I lose if I die while skulled in the wilderness",
+      "intent": "Two pages describe the relevant mechanics.",
+      "status": "verified",
+      "tags": [
+        "cross_page"
+      ],
+      "judgements": [
+        {
+          "page": "Skull (status)",
+          "section": "Mechanics",
+          "grade": 2
+        },
+        {
+          "page": "Wilderness",
+          "section": "Unique mechanics > Death mechanics",
+          "grade": 2
+        },
+        {
+          "page": "Death",
+          "section": "Unsafe and safe deaths",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q021",
+      "category": "hardcore_safety",
+      "query": "how do I stay out of reach of a monster that only attacks in melee",
+      "intent": "Describes the technique without its usual name.",
+      "status": "verified",
+      "tags": [
+        "lexical_gap",
+        "redirect"
+      ],
+      "judgements": [
+        {
+          "page": "Safespot",
+          "section": null,
+          "grade": 2
+        },
+        {
+          "page": "Safespot",
+          "section": "Notable safespots",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q022",
+      "category": "hardcore_safety",
+      "query": "which foods heal the most for fast eating in fights",
+      "intent": "Food choice for survival.",
+      "status": "verified",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Food",
+          "section": "Fast foods",
+          "grade": 2
+        },
+        {
+          "page": "Food",
+          "section": "Popular foods",
+          "grade": 1
+        }
+      ]
+    },
+    {
+      "id": "q023",
+      "category": "money_making",
+      "query": "ways to make money early on without fighting",
+      "intent": "Exploratory; answer is spread over many method subpages that were not checked.",
+      "status": "ambiguous",
+      "tags": [
+        "exploratory"
+      ],
+      "judgements": [
+        {
+          "page": "Money making guide",
+          "section": null,
+          "grade": 1
+        }
+      ],
+      "notes": "Individual methods live on subpages that were not fetched. Ground truth cannot be set until the subpages are checked."
+    },
+    {
+      "id": "q024",
+      "category": "money_making",
+      "query": "ideas for daily or passive income",
+      "intent": "Exploratory; recurring methods section is the best landing point.",
+      "status": "partial",
+      "tags": [
+        "exploratory"
+      ],
+      "judgements": [
+        {
+          "page": "Money making guide",
+          "section": "Recurring methods",
+          "grade": 2
+        },
+        {
+          "page": "Money making guide",
+          "section": "Hourly profit table",
+          "grade": 1
+        }
+      ],
+      "notes": "Only the table of contents of the page was read."
+    },
+    {
+      "id": "q025",
+      "category": "money_making",
+      "query": "does the hardcore economy differ from the normal one",
+      "intent": "Project-specific question; no article was identified for it.",
+      "status": "unresolved",
+      "tags": [
+        "exploratory",
+        "hardcore_economy"
+      ],
+      "judgements": [],
+      "notes": "No relevant page or section was identified, and the existence of a dedicated page is unverified. Do not score until a reference is found."
+    }
+  ]
+}
