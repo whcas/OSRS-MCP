@@ -21,6 +21,8 @@ tokio = { version = "1", features = ["rt"] }
 # Client side of the SDK, used only to drive the server from tests.
 rmcp = { version = "3.11", default-features = false, features = ["client", "server", "macros"] }
 serde_json = "1"
+# Throwaway directories for the Git hook tests; no optional features needed.
+tempfile = { version = "3", default-features = false }
 tokio = { version = "1", features = ["rt", "macros", "io-util", "time"] }
 
 # Lint baseline: see "Lints" in README.md. CI runs Clippy with `-D warnings`,
