@@ -9,7 +9,8 @@ deliberately and by hand.
     python3 scripts/verify_hardcore_api.py --self-test          # offline check of the summariser
 
 Behaviour, kept deliberately small and polite:
-  * identifies the project in the User-Agent (project URL, no personal contact);
+  * identifies the project in the User-Agent, in the same format as the Rust
+    client's default (project URL, no personal contact);
   * sequential requests with a pause between them, explicit timeouts and a
     response size cap;
   * prints status, selected headers and a compact schema summary per endpoint;
@@ -19,14 +20,27 @@ Python standard library only.
 """
 
 import json
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
 from collections import Counter
+from pathlib import Path
 
 BASE = "https://prices.runescape.wiki/api/v2/"
-USER_AGENT = "osrs-mcp-verify/0.1 (+https://github.com/whcas/OSRS-MCP)"
+
+
+def crate_version():
+    """The package version from Cargo.toml, so the User-Agent matches the client's."""
+    manifest = Path(__file__).resolve().parent.parent / "Cargo.toml"
+    match = re.search(r'^version\s*=\s*"([^"]+)"', manifest.read_text(), re.MULTILINE)
+    return match.group(1) if match else "unknown"
+
+
+# Same format as the Rust client's default (`ClientConfig::default`), so a
+# successful run also shows that this User-Agent is accepted.
+USER_AGENT = f"osrs-mcp/{crate_version()} (+https://github.com/whcas/OSRS-MCP)"
 TIMEOUT_SECONDS = 30
 MAX_BODY_BYTES = 8 * 1024 * 1024
 PAUSE_SECONDS = 2.0
