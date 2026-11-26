@@ -59,7 +59,7 @@ OSRS_MCP_LIVE_API=1 cargo test --locked --test live_hardcore_api -- --ignored --
 
 - `tests/live_hardcore_api.rs` is `#[ignore]`d and also needs `OSRS_MCP_LIVE_API=1`, so it cannot run by accident.
 - It uses `ClientConfig::default()` (the project User-Agent `osrs-mcp/<Cargo version> (+https://github.com/whcas/OSRS-MCP)`, a 30 s timeout and an 8 MiB body cap), makes six sequential requests two seconds apart (`mapping`, `latest?id=4151`, `5m`, `5m` scoped to the start it just returned, `1h`, `timeseries` 24h) and never retries.
-- It asserts structural facts only (Hardcore provenance, source URL, boundaries of the `5m` and `1h` timestamps, the sample item present, a positive timestep) and prints counts, never bodies. It writes nothing to disk.
+- A second ignored test, `the_real_bulk_latest_response_satisfies_the_required_field_rule`, makes one bulk `latest` request (run it alone, once, by name). Both assert structural facts only (Hardcore provenance, source URL, boundaries of the `5m` and `1h` timestamps, the sample item present, a positive timestep) and prints counts, never bodies. It writes nothing to disk.
 - Last run 2026-11-26, with the object-only parser: passed (mapping 4682 items, `5m` 450, scoped `5m` 450, `1h` 1182, `timeseries` 65 points).
 - A failure is a result: it means the real API or the client's expectations drifted. Record it, compare with this document, and fix the client or the document; do not retry in a loop. A non-200 status (for example 403 for a blocked User-Agent, or 429) is likewise a result.
 
@@ -90,6 +90,7 @@ Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one e
 | Averages have at most two decimals | Stated by the documentation; the observed values (e.g. `227.22`) are consistent. Over-precise values are rejected rather than rounded by the client |
 | `1h` top-level `timestamp`, `mapping` entry count and optional fields, response headers, User-Agent acceptance | **Observed** from the maintainer's Mac on 2026-11-26 with the project User-Agent; see "Live verification result" below |
 | Window timestamp handling | **Observed (2026-11-26, 4 requests)**: `5m?timestamp=` with a 300 s-aligned value is echoed back exactly in the response `timestamp`. An unaligned value, a value one day in the future, and `1` each returned **HTTP 400** with a 46-byte JSON body of the form `{"error": ...}`. The client therefore requires a scoped response's timestamp to equal the requested one |
+| Bulk `latest` (no `id`) | **Observed (2026-11-26, one request, real Rust client)**: 2868 items; every entry carried all four keys (`high`, `highTime`, `low`, `lowTime`), so the client's required-field rule holds. 502 entries were one-sided and none had neither side, so a never-traded item is absent from the bulk response rather than present with four nulls |
 | Rate-limit headers, 429/5xx bodies | **Not observed**: no `X-RateLimit-*` or `Retry-After` header was present, and no 429 or 5xx was provoked |
 | Whether Hardcore trades are taxed | **Unknown**; not in the API |
 

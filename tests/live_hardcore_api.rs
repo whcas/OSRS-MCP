@@ -125,3 +125,41 @@ async fn the_real_hardcore_api_matches_the_typed_client() {
         series.value.timestep_seconds
     );
 }
+
+/// One bulk `latest` request (no `id`), to confirm that the client's
+/// required-field rule (all four keys present on every entry) holds for the
+/// real bulk response. Run it alone, once:
+///
+/// ```sh
+/// OSRS_MCP_LIVE_API=1 cargo test --locked --test live_hardcore_api bulk_latest -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "makes a real network request; run with OSRS_MCP_LIVE_API=1 and --ignored"]
+async fn the_real_bulk_latest_response_satisfies_the_required_field_rule() {
+    if !live_tests_enabled() {
+        println!("skipped: set {ENABLE_VAR}=1 to run the live Hardcore API check");
+        return;
+    }
+    let client = HardcoreClient::new(ClientConfig::default()).expect("default config is valid");
+
+    // The parser rejects any entry that lacks one of the four keys, so a
+    // successful parse of the whole body is the verification.
+    let latest = client.latest(None).await.expect("bulk latest");
+
+    assert_hardcore(&latest, Endpoint::Latest);
+    assert!(!latest.value.is_empty(), "bulk latest returned no items");
+    let one_sided = latest
+        .value
+        .values()
+        .filter(|prices| prices.high.is_some() != prices.low.is_some())
+        .count();
+    let never_seen = latest
+        .value
+        .values()
+        .filter(|prices| prices.high.is_none() && prices.low.is_none())
+        .count();
+    println!(
+        "bulk latest: {} items, {one_sided} one-sided, {never_seen} with neither side",
+        latest.value.len()
+    );
+}
