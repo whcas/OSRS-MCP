@@ -14,7 +14,7 @@ Direct HTTP requests from the development container were blocked by its egress p
 
 - **Verified (one request each):** the six endpoints below returned HTTP 200 `application/json`; field names and value types come from bodies that were returned verbatim (`latest`, `5m`, `timeseries`).
 - **Not verified:** response headers (`Cache-Control`, `Date`, rate-limit headers were not visible); the `1h` top-level `timestamp` and the `mapping` entry count and optional fields (those bodies were truncated by the tool); behaviour under our own `User-Agent`; error responses (4xx/5xx, rate limiting); that the fetch tool's UA was permitted in the same way ours will be.
-- **Live verification has not been done by the maintainer, and not by this investigation from an unrestricted network.** `scripts/verify_hardcore_api.py` is an opt-in script for that: it makes five sequential Hardcore requests (plus one optional standard-world comparison) with the project User-Agent, explicit timeouts and a size cap, and prints status, selected headers and compact schema summaries without saving any bodies. Its output should be pasted into the review once run. Until then, treat everything under "Verified" below as read through the fetch tool only.
+- **Live verification has not been done by the maintainer, and not by this investigation from an unrestricted network.** `scripts/verify_hardcore_api.py` is an opt-in script for that; see "Local verification procedure" below. Its output should be pasted into the review once run. Until then, treat everything under "Verified" below as read through the fetch tool only.
 
 ## Sources compared
 
@@ -48,6 +48,29 @@ Observed samples (verbatim, 2026-11-26):
 ```
 
 The Hardcore `latest` price for item 4151 (8,000,000, last high seen about 12 days before the standard sample) against the standard 644,695 shows why standard-world data must never stand in for it.
+
+## Local verification procedure
+
+One procedure, run by a maintainer from a normal machine. Nothing here is run by CI, and **it has not been run yet**.
+
+1. `python3 scripts/verify_hardcore_api.py --compare-standard` (Python 3 standard library only; no installs).
+   - Sends six sequential GET requests two seconds apart: `mapping`, `latest?id=4151`, `5m`, `1h` and `timeseries?id=4151&lookback=24h` on `osrs-hc`, plus one `latest?id=4151` on the standard `osrs` path for comparison only.
+   - Uses the same User-Agent format as the Rust client's default, `osrs-mcp/<Cargo version> (+https://github.com/whcas/OSRS-MCP)`, with a 30 s timeout and an 8 MiB body cap. It writes nothing to disk.
+   - `python3 scripts/verify_hardcore_api.py --self-test` checks the summariser offline.
+2. Expected output: each request reports status 200, then headers (record `Cache-Control`, `Date`, `Last-Modified` and any rate-limit headers, none of which have been observed yet), then a compact schema summary. Final line `6/6 requests verified`.
+3. Compare against this document and fix anything that differs: field names and types, `1h`'s top-level `timestamp`, which `mapping` fields can be absent, and the semantic checks the script prints (null averages with non-zero volume, averages with more than two decimals, timestamp multiples of 300 and 3600).
+4. A non-200 status (for example 403 for a blocked User-Agent, or 429) is itself a result: record it, do not retry in a loop.
+5. Paste the output into the PR. It contains no bulk data. It does not settle whether volume counts items or transactions, or the side semantics of the aggregates; those need a source statement or a controlled observation.
+
+Refreshing fixtures in `tests/fixtures/hardcore_ge/` (PR #29) is manual and small, after step 3 shows the schema holds:
+
+```sh
+UA="osrs-mcp/0.1.0 (+https://github.com/whcas/OSRS-MCP)"   # match Cargo.toml's version
+curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/latest?id=4151' | python3 -m json.tool
+curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/timeseries?id=4151&lookback=24h' | python3 -m json.tool
+```
+
+Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one entry with a null side, update the provenance table in the fixtures' README to say which are real captures and which synthetic, and commit only the trimmed files. Never commit a full response.
 
 ## Verified versus inferred
 
