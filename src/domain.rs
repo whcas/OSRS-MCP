@@ -1,8 +1,10 @@
 //! Value types shared by the economy, market and account modules.
 //!
 //! This module holds only concepts that more than one part of the crate needs
-//! to agree on. It has no I/O, no clock and no dependencies, and knows nothing
-//! about MCP, HTTP or any particular data source. In particular it carries no
+//! to agree on. It has no I/O, no clock, no runtime and no source-specific
+//! dependencies, and knows nothing about MCP, HTTP or any particular data
+//! source. Its only dependency is the compile-time `thiserror` derive for
+//! [`DomainError`]. In particular it carries no
 //! provenance, world type or freshness: those describe an *observation* and
 //! belong to the layer that obtains the observation. Pure calculations such as
 //! [`crate::profit`] take these plain values, and analysis code that combines
@@ -38,8 +40,6 @@
 //! since the Unix epoch, UTC, and is never negative; importers holding signed
 //! or higher-precision timestamps keep their own representation and convert
 //! with [`TryFrom`].
-
-use std::fmt;
 
 /// A signed amount of coins (GP), such as a profit, loss, cost or fee.
 ///
@@ -139,27 +139,18 @@ pub struct ItemId(pub u32);
 pub struct UnixSeconds(pub u64);
 
 /// Why a domain value could not be created or converted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DomainError {
     /// A [`Quantity`] must be at least one.
+    #[error("quantity must be at least one")]
     ZeroQuantity,
     /// The value was negative where only a non-negative one is allowed.
+    #[error("value must not be negative")]
     NegativeValue,
     /// The value is too large for the target type.
+    #[error("value is too large for the target type")]
     OutOfRange,
 }
-
-impl fmt::Display for DomainError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::ZeroQuantity => "quantity must be at least one",
-            Self::NegativeValue => "value must not be negative",
-            Self::OutOfRange => "value is too large for the target type",
-        })
-    }
-}
-
-impl std::error::Error for DomainError {}
 
 impl TryFrom<Price> for Gp {
     type Error = DomainError;
@@ -336,12 +327,17 @@ mod tests {
 
     #[test]
     fn errors_have_readable_messages() {
-        for error in [
-            DomainError::ZeroQuantity,
-            DomainError::NegativeValue,
-            DomainError::OutOfRange,
-        ] {
-            assert_ne!(error.to_string(), "");
-        }
+        assert_eq!(
+            DomainError::ZeroQuantity.to_string(),
+            "quantity must be at least one"
+        );
+        assert_eq!(
+            DomainError::NegativeValue.to_string(),
+            "value must not be negative"
+        );
+        assert_eq!(
+            DomainError::OutOfRange.to_string(),
+            "value is too large for the target type"
+        );
     }
 }
