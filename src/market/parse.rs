@@ -601,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_bodies_are_malformed_not_empty() {
+    fn latest_rejects_non_json_wrong_shapes_and_bad_entries() {
         assert!(is_malformed(&latest(b"", None)));
         assert!(is_malformed(&latest(b"<html>blocked</html>", None)));
         assert!(is_malformed(&latest(br#"{"data":[]}"#, None)));
@@ -614,6 +614,10 @@ mod tests {
             br#"{"data":{"1":{"high":-5,"highTime":1,"low":null,"lowTime":null}}}"#,
             None
         )));
+    }
+
+    #[test]
+    fn window_rejects_a_mistyped_or_missing_field() {
         assert!(is_malformed(&window(
             Endpoint::FiveMinute,
             br#"{"data":{"1":{"avgHighPrice":"12","highPriceVolume":1,"avgLowPrice":null,"lowPriceVolume":0}}}"#,
@@ -624,7 +628,15 @@ mod tests {
             br#"{"data":{"1":{"avgHighPrice":1,"avgLowPrice":null,"lowPriceVolume":0}}}"#,
             None
         )));
+    }
+
+    #[test]
+    fn timeseries_without_its_header_is_malformed() {
         assert!(is_malformed(&timeseries(br#"{"data":[]}"#, ItemId(4151))));
+    }
+
+    #[test]
+    fn mapping_rejects_a_non_array_and_an_entry_without_a_name() {
         assert!(is_malformed(&mapping(br#"{"id":1}"#)));
         assert!(is_malformed(&mapping(br#"[{"id":1}]"#)));
     }

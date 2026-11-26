@@ -133,49 +133,9 @@ Still **inferred or unknown**, not settled by this run: item versus transaction 
 - No numeric rate limit. Access may be restricted if usage "threatens the stability" of the API, described as multiple large queries per second sustained. Fetch `/latest` without `id` rather than looping, and avoid polling; the bulk endpoints are cached.
 - Content is CC BY-NC-SA 3.0 with additional terms; RuneScape marks belong to Jagex. No separate API attribution is stated. We should credit the OSRS Wiki as the source in tool output and docs, and not redistribute dumps of the data (also required by `AGENTS.md`).
 
-## Proposed minimal Rust client (for #18)
+## Client design (implemented in #18)
 
-Keep it independent of MCP and persistence. Sketch only; names are open to review.
-
-```rust
-/// Chosen at construction; there is no default and no fallback.
-pub enum WorldType { Hardcore }          // Standard added only if a feature needs it
-
-pub struct Provenance { world_type: WorldType, endpoint: Endpoint, retrieved_at: SystemTime }
-
-pub struct Observed<T> { value: T, provenance: Provenance }
-
-pub struct ItemId(u32);
-pub struct Gp(i64);                       // reuse crate::profit::Gp
-pub struct AveragePrice { hundredths: i64 }      // two decimal places, exact
-
-pub struct LatestPrice { high: Option<Timed<Gp>>, low: Option<Timed<Gp>> }
-pub struct WindowStats { avg_high: Option<AveragePrice>, high_volume: u64,
-                         avg_low: Option<AveragePrice>,  low_volume: u64 }
-pub struct Window { start: UnixSeconds, length: WindowLength }   // 5m or 1h
-
-impl HardcoreClient {
-    pub async fn mapping(&self) -> Result<Observed<Vec<ItemInfo>>, MarketDataError>;
-    pub async fn latest(&self, item: Option<ItemId>) -> Result<Observed<BTreeMap<ItemId, LatestPrice>>, _>;
-    pub async fn window(&self, length: WindowLength, at: Option<UnixSeconds>)
-        -> Result<Observed<BTreeMap<ItemId, WindowStats>>, _>;
-    pub async fn timeseries(&self, item: ItemId, lookback: Lookback) -> Result<Observed<Series>, _>;
-}
-
-/// Staleness is a pure function so it is testable without a clock.
-pub fn classify_age(observed: UnixSeconds, now: UnixSeconds, max_age: Duration) -> Freshness; // Fresh | Stale
-```
-
-Error model, one enum, no variant for "fell back to standard":
-
-- `Transport` (connect error, timeout, TLS)
-- `Http { status }` (non-success, including 429 and 403 for a blocked UA)
-- `Malformed { endpoint, reason }` (not JSON, wrong shape, negative or non-integer price, unknown `lookback`)
-- `ResponseTooLarge { limit }` (bounded body handling)
-
-Missing data is not an error; it is `Option`/absent in the typed result. Stale data is not an error either; it is reported by `classify_age` so callers can show it.
-
-Dependencies, to justify in #18: `reqwest` (rustls, JSON off; parse with `serde_json` ourselves to keep the body bound), `serde`, `serde_json`, `tokio` (for the async client). Timeouts and a response size cap are set explicitly on the client.
+The proposal made during the investigation is implemented in `src/market`, whose module and type documentation is now the reference for the types, the error model and the dependencies; the earlier sketch is not repeated here because it no longer matches the code. The constraints it set still hold: independent of MCP and persistence, one GET per call with bounded size and explicit timeouts, results always labelled Hardcore with provenance, no variant or code path for falling back to standard-world data, and missing or stale data reported as such rather than as an error.
 
 ## Fixture strategy
 
