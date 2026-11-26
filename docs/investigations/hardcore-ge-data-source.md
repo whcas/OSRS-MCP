@@ -14,7 +14,7 @@ Direct HTTP requests from the development container were blocked by its egress p
 
 - **Verified (one request each):** the six endpoints below returned HTTP 200 `application/json`; field names and value types come from bodies that were returned verbatim (`latest`, `5m`, `timeseries`).
 - **Not verified:** response headers (`Cache-Control`, `Date`, rate-limit headers were not visible); the `1h` top-level `timestamp` and the `mapping` entry count and optional fields (those bodies were truncated by the tool); behaviour under our own `User-Agent`; error responses (4xx/5xx, rate limiting); that the fetch tool's UA was permitted in the same way ours will be.
-- A maintainer should repeat the sample requests with `curl -A '<our UA>'` from a normal machine before #18 is merged, and replace the fixtures with real captured bodies if they differ.
+- **Live verification has not been done by the maintainer, and not by this investigation from an unrestricted network.** `scripts/verify_hardcore_api.py` is an opt-in script for that: it makes five sequential Hardcore requests (plus one optional standard-world comparison) with the project User-Agent, explicit timeouts and a size cap, and prints status, selected headers and compact schema summaries without saving any bodies. Its output should be pasted into the review once run. Until then, treat everything under "Verified" below as read through the fetch tool only.
 
 ## Sources compared
 
@@ -49,6 +49,22 @@ Observed samples (verbatim, 2026-11-26):
 
 The Hardcore `latest` price for item 4151 (8,000,000, last high seen about 12 days before the standard sample) against the standard 644,695 shows why standard-world data must never stand in for it.
 
+## Verified versus inferred
+
+| Claim | Status |
+| --- | --- |
+| Endpoint paths, query parameters and field names for `latest`, `5m` and `timeseries` | Directly observed in verbatim bodies (via the fetch tool) |
+| `osrs-hc` returns different data from `osrs` for the same item | Directly observed for one item (4151) |
+| `high` is instant-buy and `low` is instant-sell in `latest` | Stated by the documentation; not independently verifiable from a response |
+| `avgHighPrice`/`highPriceVolume` correspond to the same instant-buy side as `high` | **Inferred** from naming; the documentation does not state it for the aggregate endpoints |
+| Volume counts **items** versus **transactions** | **Unknown.** The documentation says only "number traded". Observed volumes such as `35600` for item 2 and `1` for a single-item sale are consistent with either. The opt-in script cannot settle this; it needs a source statement or a controlled observation |
+| Timestamp precision | Values are about 1.79e9, which is Unix **seconds**, consistent with the documentation (observed). Sub-second precision, if any, is not exposed |
+| `5m`/`1h` `timestamp` is the block start | Stated by the documentation; the observed `5m` value 1795504200 is a multiple of 300, which is consistent |
+| `timeseries` points are contiguous at `timestep` | **Not so, as observed.** The header said 300, but the first two sampled points are 600 s apart (1795602300 then 1795602900) while the last two are 300 s apart, so steps with no trades appear to be omitted (inferred). Clients must not assume a gap-free series. The documentation also says the timestep is not guaranteed |
+| Averages have at most two decimals | Stated by the documentation; the observed values (e.g. `227.22`) are consistent. Over-precise values are rejected rather than rounded by the client |
+| `1h` top-level `timestamp`, optional `mapping` fields, response headers, error bodies, rate-limit headers | **Not observed** (truncated or invisible via the fetch tool) |
+| Whether Hardcore trades are taxed | **Unknown**; not in the API |
+
 ## Semantics
 
 - **Buy/sell:** `high` is the latest *instant-buy* price and `low` the latest *instant-sell* price. For `5m`, `1h` and `timeseries`, `avgHighPrice`/`highPriceVolume` and `avgLowPrice`/`lowPriceVolume` are the corresponding averages and trade counts. The documentation states this mapping only for `latest`; applying it to the aggregates is an inference.
@@ -61,7 +77,7 @@ The Hardcore `latest` price for item 4151 (8,000,000, last high seen about 12 da
 
 ## Usage policy
 
-- A descriptive `User-Agent` is the only stated requirement, ideally with contact information. Generic clients (`python-requests`, `curl`, `Java/*`, `Apache-HttpClient`, `RestSharp`, `Python-urllib`) are blocked pre-emptively. Proposed UA: `osrs-mcp/<version> (+https://github.com/whcas/OSRS-MCP)`, with the maintainer's contact appended if they wish.
+- A descriptive `User-Agent` is the only stated requirement, ideally with contact information. Generic clients (`python-requests`, `curl`, `Java/*`, `Apache-HttpClient`, `RestSharp`, `Python-urllib`) are blocked pre-emptively. Proposed UA: `osrs-mcp/<version> (+https://github.com/whcas/OSRS-MCP)`. The project URL is the contact; no personal email or handle is used.
 - No numeric rate limit. Access may be restricted if usage "threatens the stability" of the API, described as multiple large queries per second sustained. Fetch `/latest` without `id` rather than looping, and avoid polling; the bulk endpoints are cached.
 - Content is CC BY-NC-SA 3.0 with additional terms; RuneScape marks belong to Jagex. No separate API attribution is stated. We should credit the OSRS Wiki as the source in tool output and docs, and not redistribute dumps of the data (also required by `AGENTS.md`).
 
@@ -126,4 +142,5 @@ Dependencies, to justify in #18: `reqwest` (rustls, JSON off; parse with `serde_
 1. Hardcore GE tax: does it apply, at what rate, with what rounding and cap?
 2. Exact `1h` top-level `timestamp` and optional fields in `mapping` for this world type.
 3. Real response headers and rate-limit behaviour for our User-Agent.
-4. Preferred maintainer contact string for the User-Agent.
+4. Whether `highPriceVolume` and `lowPriceVolume` count items or transactions.
+5. Whether the aggregate endpoints' "high" and "low" sides match `latest`'s instant-buy and instant-sell sides.
