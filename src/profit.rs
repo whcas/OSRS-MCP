@@ -62,8 +62,6 @@
 //! - ROI is `None` when the acquisition cost is zero, since it is undefined
 //!   rather than zero.
 
-use std::fmt;
-
 pub use crate::domain::{Gp, Quantity};
 
 /// Divisor converting basis points to a fraction.
@@ -191,39 +189,27 @@ pub struct Outcome {
 }
 
 /// Why a transaction could not be evaluated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ProfitError {
     /// A unit price was negative.
+    #[error("unit price must not be negative")]
     NegativePrice,
     /// A unit price was missing (as opposed to zero).
+    #[error("unit price is missing")]
     MissingPrice,
     /// The transaction has no input lines.
+    #[error("transaction has no inputs")]
     NoInputs,
     /// The transaction has no output lines.
+    #[error("transaction has no outputs")]
     NoOutputs,
     /// A fee rate above 10,000 basis points or a negative fee cap.
+    #[error("fee policy is invalid: rate must be at most 10000 bp and cap non-negative")]
     InvalidFeePolicy,
     /// An intermediate value did not fit in a signed 64-bit amount.
+    #[error("amount overflows a signed 64-bit GP value")]
     Overflow,
 }
-
-impl fmt::Display for ProfitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let message = match self {
-            Self::NegativePrice => "unit price must not be negative",
-            Self::MissingPrice => "unit price is missing",
-            Self::NoInputs => "transaction has no inputs",
-            Self::NoOutputs => "transaction has no outputs",
-            Self::InvalidFeePolicy => {
-                "fee policy is invalid: rate must be at most 10000 bp and cap non-negative"
-            }
-            Self::Overflow => "amount overflows a signed 64-bit GP value",
-        };
-        f.write_str(message)
-    }
-}
-
-impl std::error::Error for ProfitError {}
 
 /// Evaluates a transaction.
 ///
@@ -692,9 +678,25 @@ mod tests {
 
     #[test]
     fn errors_have_readable_messages() {
-        assert_eq!(
-            ProfitError::MissingPrice.to_string(),
-            "unit price is missing"
-        );
+        let messages = [
+            (
+                ProfitError::NegativePrice,
+                "unit price must not be negative",
+            ),
+            (ProfitError::MissingPrice, "unit price is missing"),
+            (ProfitError::NoInputs, "transaction has no inputs"),
+            (ProfitError::NoOutputs, "transaction has no outputs"),
+            (
+                ProfitError::InvalidFeePolicy,
+                "fee policy is invalid: rate must be at most 10000 bp and cap non-negative",
+            ),
+            (
+                ProfitError::Overflow,
+                "amount overflows a signed 64-bit GP value",
+            ),
+        ];
+        for (error, message) in messages {
+            assert_eq!(error.to_string(), message);
+        }
     }
 }
