@@ -3,11 +3,15 @@
 Investigation for #5: can the minimal MCP server (#3) be used from the
 maintainer's ChatGPT project and subscription?
 
-**Status: documented from OpenAI's official pages on 2026-11-26. Nothing below
-has been tested against a real ChatGPT account.** Every scenario is marked
-*Documented* (stated by OpenAI) or *Untested* (not exercised by us). The
-maintainer's plan and the ChatGPT desktop version are unknown to us, so plan
-eligibility is unresolved.
+**Status (2026-11-26): the local stdio server works from Codex.** It was
+verified from the Codex CLI and, by the maintainer, from the ChatGPT desktop
+app's native Codex integration (see the verification record). **The ordinary
+hosted ChatGPT chats and Projects are not tested and are deferred**: they need
+a remote server, which does not exist yet, and a Codex result says nothing
+about them. The OpenAI findings below come from its official pages, read on
+2026-11-26, and are marked *Documented* (stated by OpenAI), *Verified*
+(observed by us) or *Untested*. The maintainer's plan is unknown to us, so plan
+eligibility for hosted ChatGPT is unresolved.
 
 ## Sources
 
@@ -69,11 +73,12 @@ count limits.
 
 ## Recommended fallback and next steps
 
-1. **Try the Codex-local stdio path** (no hosting, no network exposure). This
-   tests the Codex host only. On the maintainer's machine, build the release
-   binary and add it to the ChatGPT desktop app's Codex MCP settings (Settings
-   → MCP servers → STDIO, command = absolute path to `osrs-mcp`, argument
-   `serve`) or to Codex directly:
+1. **Codex-local stdio path: done and verified** (no hosting, no network
+   exposure; see the verification record). It tests the Codex host only. To
+   repeat it on another machine, build the release binary and add it to the
+   ChatGPT desktop app's Codex MCP settings (Settings → MCP servers → STDIO,
+   command = absolute path to `osrs-mcp`, argument `serve`) or to Codex
+   directly:
 
    ```toml
    # ~/.codex/config.toml
@@ -82,15 +87,15 @@ count limits.
    args = ["serve"]
    ```
 
-   Then ask Codex to call `server_info`. Record the app version, plan, OS and
-   the observed result, or the error, below.
-2. **Test the actual ChatGPT Project separately.** Open the maintainer's
-   project and check whether any custom tool or plugin can be added there at
+   Then ask Codex to call `server_info`.
+2. **Test the actual ChatGPT Project separately: deferred.** The maintainer
+   has deferred this until useful domain tools are exposed through MCP. It
+   would check whether any custom tool or plugin can be added to the project at
    all. Based on the documentation this requires the remote path below, so
    expect it to fail with the stdio server. A Codex success does not substitute
-   for this.
-3. **If neither works**, use Claude Code or Claude Desktop for now (#4) and
-   treat hosted ChatGPT as requiring remote hosting.
+   for this, and no hosted compatibility is inferred.
+3. **Meanwhile**, Codex (verified) and Claude Code or Claude Desktop (#4) are
+   the working clients; hosted ChatGPT needs remote hosting.
 4. **Requirements for future remote hosting** (a separate issue and ADR; not
    started here):
    - A streamable HTTP transport (rmcp provides one behind a feature flag),
@@ -150,7 +155,7 @@ restriction encountered.
 - Registered with `codex mcp add osrs -- <home>/.cargo/bin/osrs-mcp serve` after backing up `~/.codex/config.toml`. Codex rewrote the file (entry order, `120` written as `120.0`), but a parsed comparison showed the only semantic change is the new `osrs` entry; existing entries are intact.
 - `codex mcp list` shows `osrs` enabled over stdio, and a `codex exec` run with **no overrides** called `server_info` through the registered entry and got the expected result.
 - Remove with `codex mcp remove osrs`. Rebuild and reinstall after pulling changes.
-- Because the ChatGPT desktop app shares this configuration, the app should now list the server; that is not yet confirmed in its UI.
+- The ChatGPT desktop app shares this configuration, and the maintainer confirmed that it lists the server and returns the `server_info` result (see "Codex Desktop result").
 
 ### Codex Desktop result (2026-11-26, observed by the maintainer)
 
