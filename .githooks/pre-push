@@ -1,0 +1,41 @@
+#!/bin/sh
+# Pre-push verification via `scripts/check.sh` (fmt, Clippy, build, tests).
+# Opt in with `scripts/install-hooks.sh`. The dependency audit is excluded
+# because it needs network access.
+#
+# The checks run on the working tree, not on the commits being pushed. A warning
+# is printed when the two can differ. Bypass once with `git push --no-verify`.
+# CI remains authoritative.
+
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+
+zero=0000000000000000000000000000000000000000
+pushing=false
+differs=false
+head=$(git rev-parse HEAD 2>/dev/null)
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    case "$local_sha" in
+        *[!0]*) ;;
+        *) continue ;; # all zeros: a deletion, nothing to verify
+    esac
+    pushing=true
+    [ "$local_sha" = "$head" ] || differs=true
+done
+
+$pushing || exit 0
+
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    differs=true
+fi
+if $differs; then
+    echo "pre-push: warning: checks run on the working tree, which has uncommitted changes" >&2
+    echo "pre-push: or is not the commit being pushed; CI verifies the pushed commit." >&2
+fi
+
+if ! scripts/check.sh; then
+    echo "pre-push: checks failed; push aborted (override with --no-verify)." >&2
+    exit 1
+fi
