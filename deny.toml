@@ -11,7 +11,11 @@ all-features = true
 # yanked versions. Add exceptions here only with a reason and a linked issue.
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+# RUSTSEC-2026-0543: chrono is unmaintained, with no safe upgrade. It is a
+# mandatory dependency of rmcp 3.x and cannot be disabled through features.
+# Tracked in https://github.com/whcas/OSRS-MCP/issues/23; remove once rmcp
+# drops it.
+ignore = ["RUSTSEC-2026-0543"]
 
 [bans]
 multiple-versions = "warn"
