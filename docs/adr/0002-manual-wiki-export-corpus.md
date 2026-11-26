@@ -1,6 +1,6 @@
 # ADR-0002: Build the Wiki corpus from manually exported XML
 
-- Status: Accepted for the acquisition decision (manual `Special:Export` XML as the MVP input, selected by the maintainer in issue #6). The licensing, reuse, attribution and hosted-model questions listed under Consequences remain open and are not accepted by this ADR.
+- Status: Accepted for the acquisition decision only; the licensing and reuse questions under Consequences remain open
 - Date: 2026-11-26
 - Related issues or PRs: #6 (decision), #22 (investigation), #16 and #37 (evaluation), #32 to #36 (implementation)
 
