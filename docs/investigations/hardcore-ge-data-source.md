@@ -51,19 +51,19 @@ The Hardcore `latest` price for item 4151 (8,000,000, last high seen about 12 da
 
 ## Local verification procedure
 
-One procedure, run by a maintainer from a normal machine. Nothing here is run by CI. It was last run on 2026-11-26 (see "Live verification result").
+One procedure, run by a maintainer from a normal machine. Nothing here is run by CI or `scripts/check.sh`.
 
-1. `python3 scripts/verify_hardcore_api.py --compare-standard` (Python 3 standard library only; no installs).
-   - Sends six sequential GET requests two seconds apart: `mapping`, `latest?id=4151`, `5m`, `1h` and `timeseries?id=4151&lookback=24h` on `osrs-hc`, plus one `latest?id=4151` on the standard `osrs` path for comparison only.
-   - Uses the same User-Agent format as the Rust client's default, `osrs-mcp/<Cargo version> (+https://github.com/whcas/OSRS-MCP)`, with a 30 s timeout and an 8 MiB body cap. It writes nothing to disk.
-   - `python3 scripts/verify_hardcore_api.py --self-test` checks the summariser offline.
-   - macOS on Apple Silicon: `python3` (3.8 or newer; the script is tested against 3.13) comes with the Xcode Command Line Tools (`xcode-select --install`) or Homebrew, and `curl` is built in. Run from a terminal at the repository root. No other tools or packages are needed.
-2. Expected output: each request reports status 200, then headers (record `Cache-Control`, `Date`, `Last-Modified` and any rate-limit headers, none of which have been observed yet), then a compact schema summary. Final line `6/6 requests verified`.
-3. Compare against this document and fix anything that differs: field names and types, `1h`'s top-level `timestamp`, which `mapping` fields can be absent, and the semantic checks the script prints (null averages with non-zero volume, averages with more than two decimals, timestamp multiples of 300 and 3600).
-4. A non-200 status (for example 403 for a blocked User-Agent, or 429) is itself a result: record it, do not retry in a loop.
-5. Paste the output into the PR. It contains no bulk data. It does not settle whether volume counts items or transactions, or the side semantics of the aggregates; those need a source statement or a controlled observation.
+```sh
+OSRS_MCP_LIVE_API=1 cargo test --locked --test live_hardcore_api -- --ignored --nocapture
+```
 
-Rust client contract check (also opt-in, never in CI or `scripts/check.sh`): `OSRS_MCP_LIVE_API=1 cargo test --locked --test live_hardcore_api -- --ignored --nocapture`. It makes five sequential requests two seconds apart with `ClientConfig::default()` (the project User-Agent), no retries, asserts only structural facts and prints counts, never bodies. Last run 2026-11-26: passed (mapping 4682 items, `5m` 322, `1h` 1058, `timeseries` 68 points).
+- `tests/live_hardcore_api.rs` is `#[ignore]`d and also needs `OSRS_MCP_LIVE_API=1`, so it cannot run by accident.
+- It uses `ClientConfig::default()` (the project User-Agent `osrs-mcp/<Cargo version> (+https://github.com/whcas/OSRS-MCP)`, a 30 s timeout and an 8 MiB body cap), makes five sequential requests two seconds apart (`mapping`, `latest?id=4151`, `5m`, `1h`, `timeseries` 24h) and never retries.
+- It asserts structural facts only (Hardcore provenance, source URL, boundaries of the `5m` and `1h` timestamps, the sample item present, a positive timestep) and prints counts, never bodies. It writes nothing to disk.
+- Last run 2026-11-26: passed (mapping 4682 items, `5m` 322, `1h` 1058, `timeseries` 68 points).
+- A failure is a result: it means the real API or the client's expectations drifted. Record it, compare with this document, and fix the client or the document; do not retry in a loop. A non-200 status (for example 403 for a blocked User-Agent, or 429) is likewise a result.
+
+The first live check used a throwaway Python script (`scripts/verify_hardcore_api.py`, since retired, see the git history of PR #24) that also printed response headers and compared one standard-world request. Its findings are recorded below. If header-level checks are needed again, expose them from the client instead of keeping a parallel script. This procedure does not settle whether volume counts items or transactions, or the side semantics of the aggregates; those need a source statement or a controlled observation.
 
 Refreshing fixtures in `tests/fixtures/hardcore_ge/` (PR #29) is manual and small, after step 3 shows the schema holds:
 
@@ -94,7 +94,7 @@ Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one e
 
 ## Live verification result (2026-11-26, 11:34 UTC)
 
-`python3 scripts/verify_hardcore_api.py --compare-standard` was run locally (macOS, unrestricted network) with the project User-Agent `osrs-mcp/0.1.0 (+https://github.com/whcas/OSRS-MCP)`. Result: `6/6 requests verified`, all HTTP 200, `Content-Type: application/json; charset=utf-8`, so the project User-Agent is accepted. The schema matches the documented one; nothing in the earlier fetch-tool reading was contradicted.
+The since-retired `scripts/verify_hardcore_api.py --compare-standard` was run locally (macOS, unrestricted network) with the project User-Agent `osrs-mcp/0.1.0 (+https://github.com/whcas/OSRS-MCP)`. Result: `6/6 requests verified`, all HTTP 200, `Content-Type: application/json; charset=utf-8`, so the project User-Agent is accepted. The schema matches the documented one; nothing in the earlier fetch-tool reading was contradicted.
 
 | Observation | Value |
 | --- | --- |
@@ -187,10 +187,10 @@ The client in `src/market/` follows the sketch above with these differences:
 
 - Prices use the module's own `Price` (whole GP) and `AveragePrice` (hundredths of a GP) rather than `profit::Gp`, to keep the client independent of #14. Conversion between them is left to the caller that joins them.
 - `reqwest` 0.13 puts query-string support behind a feature, so query parameters are built with `Url::query_pairs_mut`.
-- The mapping response is parsed with only `id` and `name` required, because which fields can be absent was not verified.
+- The mapping response is parsed with only `id` and `name` required; the live check showed `limit`, `value`, `highalch` and `lowalch` can be absent, so the parser's choice is confirmed.
 - Fixtures in `tests/fixtures/hardcore_ge/` are partly synthetic; see the README there.
 - The client rejects any base URL other than the real `osrs-hc` endpoint or a loopback test server, records the exact source URL in provenance, validates scoped responses against the request, and reports observations dated in the future as such. These follow review feedback and are covered by regression tests.
-- Live verification with `scripts/verify_hardcore_api.py` is still outstanding; #29 stays a draft until its output has been reviewed.
+- The client was checked against the live API on 2026-11-26 with the opt-in test in "Local verification procedure". Non-200 behaviour is still unobserved.
 
 ## Trade-offs and recommendation
 

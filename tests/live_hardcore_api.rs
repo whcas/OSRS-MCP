@@ -26,7 +26,8 @@ use osrs_mcp::market::{
 };
 
 const ENABLE_VAR: &str = "OSRS_MCP_LIVE_API";
-/// Same politeness as `scripts/verify_hardcore_api.py`.
+/// Deliberately slow: one request every two seconds, to stay well inside the
+/// API operator's usage expectations.
 const PAUSE_BETWEEN_REQUESTS: Duration = Duration::from_secs(2);
 const SAMPLE_ITEM: ItemId = ItemId(4151);
 /// Any plausible current Unix time is after this (2023-11-14); it catches a
