@@ -109,17 +109,38 @@ count limits.
 Per the issue, no server was exposed publicly and no credentials were used or
 committed in this investigation.
 
-## Manual verification record (to be filled in by the maintainer)
+## Verification record
 
 | Scenario | Status | Evidence |
 | --- | --- | --- |
-| Codex-local: ChatGPT desktop app (Codex host) + stdio | Untested | |
-| Codex-local: Codex CLI or IDE extension + stdio | Untested | |
+| Codex-local: ChatGPT desktop app (Codex host) + stdio | Untested | Needs the app's own UI; see below |
+| Codex-local: Codex CLI + stdio | **Verified** (2026-11-26) | See "Codex CLI result" |
 | Actual ChatGPT Project (hosted) can add any custom tool or plugin | Untested | |
 | Actual ChatGPT Project + remote server (tunnel or hosted) | Untested, and requires new server work | |
 
-The first two rows prove nothing about the last two, and vice versa.
+The first two rows prove nothing about the last two, and vice versa. The IDE extension was not tested.
 
 For each tested scenario record: client and version, plan, OS, transport,
 configuration used (mask paths), the result of calling `server_info`, and any
 restriction encountered.
+
+### Codex CLI result (2026-11-26)
+
+- Client: `codex-cli` 0.172.0, signed in with a ChatGPT account, macOS on Apple Silicon (arm64), non-interactive `codex exec --json --ephemeral -s read-only`.
+- Server: `osrs-mcp` 0.1.0, release build of the #3 branch head (`3e394e3`), launched over stdio.
+- Configuration: **no Codex config file was modified.** The server was supplied per run with `-c mcp_servers.osrs.command=<absolute path to osrs-mcp>` and `-c mcp_servers.osrs.args=["serve"]`. Registering it permanently (`codex mcp add` or the `~/.codex/config.toml` snippet above) was therefore not exercised.
+- Prompt: "Call the osrs MCP server's server_info tool and reply with exactly the JSON it returned."
+- Sanitised events (the `mcp_tool_call` item is the evidence, not the model's reply):
+
+  ```text
+  item.started    mcp_tool_call  server: osrs  tool: server_info  arguments: {}
+  item.completed  mcp_tool_call  result: {"capabilities":["tools"],"name":"osrs-mcp","read_only":true,"version":"0.1.0"}
+  turn.completed  (no error)
+  ```
+
+- Not observed: any approval prompt (non-interactive mode, read-only sandbox), the interactive TUI, and the IDE extension.
+
+### Still unverified
+
+- **ChatGPT desktop app as a Codex host.** Installed and signed in on the maintainer's Mac. It reads the shared Codex configuration, so registering the server in `~/.codex/config.toml` should make it available there, but that edit changes the maintainer's configuration and was not made. The app's own UI (does it list the server, does it prompt, does `server_info` return) needs a person at the app.
+- **Actual ChatGPT Project.** No custom tool or plugin addition was attempted. Per the sections above, a stdio server cannot be used there; whether the maintainer's plan allows any custom connector is a UI check, and any remote server would need explicit approval and new server work. A Codex result does not prove a Project result.
