@@ -3,11 +3,11 @@
 //! This is the only place in the crate that performs network I/O for market
 //! data. It fetches bytes, bounds them, and hands them to the pure parsers.
 
-use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use reqwest::redirect::Policy;
 use reqwest::{Client, Url};
+use thiserror::Error;
 
 use super::error::{MarketDataError, TransportKind};
 use super::model::{
@@ -76,33 +76,22 @@ impl Default for ClientConfig {
 }
 
 /// Why a client could not be constructed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ConfigError {
     /// The base URL did not parse.
+    #[error("base URL is not a valid URL")]
     InvalidBaseUrl,
     /// The base URL is not the Hardcore endpoint (or, when allowed, a loopback
     /// test server whose path ends in `osrs-hc`).
+    #[error("base URL is not the Hardcore endpoint or a loopback osrs-hc test server")]
     NotHardcoreEndpoint,
     /// The `User-Agent` was blank.
+    #[error("user agent must not be blank")]
     BlankUserAgent,
     /// The underlying HTTP client could not be built.
+    #[error("HTTP client could not be built")]
     HttpClient,
 }
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::InvalidBaseUrl => "base URL is not a valid URL",
-            Self::NotHardcoreEndpoint => {
-                "base URL is not the Hardcore endpoint or a loopback osrs-hc test server"
-            }
-            Self::BlankUserAgent => "user agent must not be blank",
-            Self::HttpClient => "HTTP client could not be built",
-        })
-    }
-}
-
-impl std::error::Error for ConfigError {}
 
 /// A read-only client for Hardcore Grand Exchange data.
 ///
