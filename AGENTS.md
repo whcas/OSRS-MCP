@@ -6,8 +6,25 @@
 - Use a dedicated short-lived branch from current `main` (e.g. `feat/12-character-parser`). Never commit or push directly to `main`.
 - For non-trivial work, propose a plan and flag uncertain requirements before implementation.
 - Prefer TDD for business logic: define behaviour, write a failing test, implement, then refactor. For significant logic, obtain maintainer agreement on the expected behaviour before implementing.
-- Keep commits focused; open a PR linked to the issue. Report assumptions, verification results and limitations. Do not merge PRs, change repository protections or deploy without explicit maintainer action.
+- Open a PR linked to the issue. Report assumptions, verification results and limitations. Do not merge PRs, change repository protections or deploy without explicit maintainer action.
 - Record significant architectural decisions in `docs/adr/`; avoid ADRs for routine implementation details.
+
+## Commit discipline
+
+- Commit incrementally during development, at meaningful checkpoints, rather than accumulating an entire non-trivial implementation into one commit.
+- Each commit should be coherent and independently understandable, with a descriptive message explaining its purpose.
+- Prefer commits that leave the project buildable and relevant tests passing. Separate implementation, configuration, documentation and refactoring when they are independently reviewable.
+- Do not split a small coherent change artificially, commit every red-green-refactor step, or manufacture or rewrite history to satisfy these guidelines.
+- Feature-branch commits support development and review; the maintainer squash-merges the completed PR into `main`.
+
+## Code quality
+
+- Prefer small, cohesive functions with clear responsibilities and consistent levels of abstraction. Use descriptive names and straightforward control flow.
+- Separate decisions from side effects where practical; make entry points read as orchestration rather than implementation details.
+- Refactor for readability as part of implementation. Extract helpers only when they improve clarity or testability; avoid arbitrary function-size targets and speculative abstractions.
+- Maintain the strict Rust and Clippy baseline in `Cargo.toml` and test exceptions in `clippy.toml`: enable `all`, `pedantic`, `nursery` and deliberately selected restriction lints, not the entire restriction group.
+- Resolve lint findings by improving the code where practical. If an exception is necessary, propose the narrowest scope, explain the reason and obtain maintainer review. Prefer `#[expect(..., reason = "...")]` over `#[allow(...)]` where supported, so obsolete expectations are reported.
+- Keep test exceptions narrowly scoped to tests. Never weaken the lint baseline, add broad suppressions or change checks simply to get a green build.
 
 ## Rust and architecture
 
@@ -21,7 +38,7 @@
 
 ## Verification
 
-- Once the Rust project exists, run the repository's documented checks. At minimum: formatting, Clippy with warnings denied, and tests using locked dependencies.
+- Run `scripts/check.sh` before opening or updating a PR; it runs formatting, Clippy with warnings denied, build and tests using locked dependencies. Run `scripts/check.sh audit` when applicable; report any checks that could not be run.
 - Tests should be deterministic, isolated and verify observable behaviour. Unit tests must not depend on live services; use small sanitised fixtures for external data.
 - Add regression tests for corrected defects. Test error paths and boundary cases as appropriate.
 - Never weaken tests, suppress diagnostics or claim checks passed merely to get a green build. Explain any checks that cannot be run.
