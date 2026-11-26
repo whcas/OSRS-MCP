@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use osrs_mcp::market::{
-    ClientConfig, Endpoint, HardcoreClient, ItemId, Lookback, MarketDataError, TransportKind,
-    UnixSeconds, WindowLength, WorldType,
+    ClientConfig, ConfigError, Endpoint, HardcoreClient, ItemId, Lookback, MarketDataError,
+    TransportKind, UnixSeconds, WindowLength, WorldType,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -151,7 +151,9 @@ fn client_for(mock: &Mock, adjust: impl FnOnce(&mut ClientConfig)) -> HardcoreCl
 
 #[tokio::test]
 async fn latest_for_one_item_requests_the_hardcore_path_and_labels_provenance() {
-    let mock = serve(vec![ok(LATEST)]).await;
+    let scoped =
+        r#"{"data":{"4151":{"high":8000000,"highTime":1794623592,"low":null,"lowTime":null}}}"#;
+    let mock = serve(vec![ok(scoped)]).await;
     let client = client_for(&mock, |_| {});
 
     let result = client.latest(Some(ItemId(4151))).await.unwrap();
@@ -162,6 +164,10 @@ async fn latest_for_one_item_requests_the_hardcore_path_and_labels_provenance() 
     );
     assert_eq!(result.provenance.world_type, WorldType::Hardcore);
     assert_eq!(result.provenance.endpoint, Endpoint::Latest);
+    assert_eq!(
+        result.provenance.source_url,
+        format!("{}latest?id=4151", mock.base_url)
+    );
     assert_eq!(result.provenance.retrieved_at, UnixSeconds(1_795_700_000));
     let prices = result.value[&ItemId(4151)];
     assert_eq!(prices.high.map(|t| t.price.0), Some(8_000_000));
@@ -352,4 +358,69 @@ async fn a_body_exactly_at_the_limit_is_accepted() {
     let mock = serve(vec![ok(body)]).await;
     let client = client_for(&mock, |config| config.max_response_bytes = body.len());
     assert!(client.latest(None).await.unwrap().value.is_empty());
+}
+
+#[tokio::test]
+async fn a_response_for_a_different_item_than_requested_is_malformed() {
+    // The unscoped fixture holds items 2, 99 and 4151, so it is not a valid
+    // answer to a request for item 4151 alone.
+    let mock = serve(vec![ok(LATEST)]).await;
+    let error = client_for(&mock, |_| {})
+        .latest(Some(ItemId(4151)))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            MarketDataError::Malformed {
+                endpoint: Endpoint::Latest,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+
+    let mock = serve(vec![ok(TIMESERIES)]).await;
+    let error = client_for(&mock, |_| {})
+        .timeseries(ItemId(2), Lookback::TwentyFourHours)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            MarketDataError::Malformed {
+                endpoint: Endpoint::Timeseries,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_requested_item_missing_from_the_response_is_valid_and_absent() {
+    let mock = serve(vec![ok(r#"{"data":{}}"#)]).await;
+    let result = client_for(&mock, |_| {})
+        .latest(Some(ItemId(4151)))
+        .await
+        .unwrap();
+    assert!(result.value.is_empty());
+}
+
+#[test]
+fn the_standard_world_endpoint_cannot_be_used_to_build_a_hardcore_client() {
+    for base_url in [
+        "https://prices.runescape.wiki/api/v2/osrs/",
+        "http://127.0.0.1:8080/api/v2/osrs/",
+    ] {
+        let config = ClientConfig {
+            base_url: base_url.to_owned(),
+            ..ClientConfig::default()
+        };
+        assert_eq!(
+            HardcoreClient::new(config).map(|_| ()),
+            Err(ConfigError::NotHardcoreEndpoint),
+            "{base_url}"
+        );
+    }
 }

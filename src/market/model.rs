@@ -65,12 +65,15 @@ impl Endpoint {
 }
 
 /// Where and when a value was obtained.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provenance {
     /// The world type the data describes.
     pub world_type: WorldType,
     /// The endpoint that returned it.
     pub endpoint: Endpoint,
+    /// The full URL requested, including its query string, so the exact
+    /// source stays on record rather than being implied by the labels.
+    pub source_url: String,
     /// When this process received the response. This is not the time of the
     /// trades inside it; those are carried by the values themselves.
     pub retrieved_at: UnixSeconds,
@@ -228,13 +231,18 @@ pub struct ItemInfo {
 /// Whether an observation is recent enough.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Freshness {
-    /// Age is within the limit. An observation dated after `now` (clock skew)
-    /// counts as age zero.
+    /// Age is within the limit.
     Fresh,
     /// Older than the limit.
     Stale {
         /// Age in whole seconds.
         age_seconds: u64,
+    },
+    /// Dated after `now`. This indicates clock skew or bad data; it is never
+    /// reported as fresh, so the caller must decide how much to trust it.
+    Future {
+        /// How far ahead of `now` the observation is, in whole seconds.
+        ahead_seconds: u64,
     },
 }
 
@@ -246,7 +254,12 @@ pub const fn classify_age(
     now: UnixSeconds,
     max_age: Duration,
 ) -> Freshness {
-    let age_seconds = now.0.saturating_sub(observed_at.0);
+    if observed_at.0 > now.0 {
+        return Freshness::Future {
+            ahead_seconds: observed_at.0 - now.0,
+        };
+    }
+    let age_seconds = now.0 - observed_at.0;
     if age_seconds > max_age.as_secs() {
         Freshness::Stale { age_seconds }
     } else {
@@ -274,9 +287,19 @@ mod tests {
     }
 
     #[test]
-    fn observation_from_the_future_counts_as_fresh() {
+    fn observation_from_the_future_is_reported_as_such_never_fresh() {
         assert_eq!(
             classify_age(UnixSeconds(2_000), UnixSeconds(1_000), HOUR),
+            Freshness::Future {
+                ahead_seconds: 1_000
+            }
+        );
+        assert_eq!(
+            classify_age(UnixSeconds(1_001), UnixSeconds(1_000), HOUR),
+            Freshness::Future { ahead_seconds: 1 }
+        );
+        assert_eq!(
+            classify_age(UnixSeconds(1_000), UnixSeconds(1_000), HOUR),
             Freshness::Fresh
         );
     }

@@ -14,6 +14,15 @@
 //!
 //! - Results are always labelled [`WorldType::Hardcore`]. The client targets
 //!   the `osrs-hc` endpoint set and never falls back to standard-world data.
+//!   The configured base URL must be that endpoint (or a loopback test server
+//!   whose path ends in `osrs-hc`), and [`Provenance::source_url`] records the
+//!   exact URL each result came from.
+//! - Scoped responses are checked against the request: a `latest` or
+//!   `timeseries` answer for a different item, a zero timestep or a reversed
+//!   range is malformed. Averages are parsed from their exact text and
+//!   rejected, not rounded, if they have more than two decimals or use an
+//!   exponent.
+//! - An observation dated after `now` is [`Freshness::Future`], never fresh.
 //! - A price that was never observed is `None`, not zero. Whether an
 //!   observation is too old is decided by the caller with [`classify_age`] and
 //!   an explicit limit; staleness is not an error.
@@ -26,8 +35,9 @@
 //!   client with explicit timeouts and no system TLS dependency. Redirects are
 //!   disabled and bodies are read in bounded chunks, so the JSON, query-string
 //!   and compression features are not enabled.
-//! - `serde` and `serde_json`: response parsing. Bodies are parsed by this
-//!   crate from already-bounded bytes rather than by `reqwest`.
+//! - `serde` and `serde_json` (with `arbitrary_precision`, so number literals
+//!   keep their exact text for decimal handling): response parsing. Bodies are
+//!   parsed by this crate from already-bounded bytes rather than by `reqwest`.
 //! - `tokio` is a dev-dependency only, for the loopback server used in
 //!   `tests/market_client.rs`.
 

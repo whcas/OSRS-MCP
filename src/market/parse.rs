@@ -91,9 +91,12 @@ fn item_id(endpoint: Endpoint, key: &str) -> Result<ItemId, MarketDataError> {
         .map_err(|_| malformed(endpoint, format!("item key {key:?} is not an item id")))
 }
 
-/// Converts a JSON number to hundredths of a GP without floating-point
-/// rounding. More than two decimals, negatives and exponents are rejected
-/// rather than rounded.
+/// Converts a JSON number to hundredths of a GP from its exact text.
+///
+/// `serde_json` is built with `arbitrary_precision`, so a `Number` keeps the
+/// literal as written and no floating-point rounding happens. More than two
+/// decimals, negatives and exponent notation (`1e3`) are rejected rather than
+/// rounded or interpreted.
 fn average_price(endpoint: Endpoint, number: &Number) -> Result<AveragePrice, MarketDataError> {
     let text = number.to_string();
     let bad = || {
@@ -165,18 +168,31 @@ fn timed_price(
 
 /// Parses a `/latest` body. Items the API omits are absent from the map;
 /// items present with a never-seen side have `None` for that side.
-pub(super) fn latest(body: &[u8]) -> Result<BTreeMap<ItemId, LatestPrices>, MarketDataError> {
+///
+/// When `scope` names the requested item, any other item in the response is
+/// malformed: an absent requested item is valid, a different one is not.
+pub(super) fn latest(
+    body: &[u8],
+    scope: Option<ItemId>,
+) -> Result<BTreeMap<ItemId, LatestPrices>, MarketDataError> {
     const ENDPOINT: Endpoint = Endpoint::Latest;
     let envelope: Envelope<BTreeMap<String, LatestEntry>> = from_json(ENDPOINT, body)?;
     envelope
         .data
         .into_iter()
         .map(|(key, entry)| {
+            let id = item_id(ENDPOINT, &key)?;
+            if scope.is_some_and(|requested| requested != id) {
+                return Err(malformed(
+                    ENDPOINT,
+                    format!("response contains item {key} but a different item was requested"),
+                ));
+            }
             let prices = LatestPrices {
                 high: timed_price(ENDPOINT, "high", entry.high, entry.high_time)?,
                 low: timed_price(ENDPOINT, "low", entry.low, entry.low_time)?,
             };
-            Ok((item_id(ENDPOINT, &key)?, prices))
+            Ok((id, prices))
         })
         .collect()
 }
@@ -195,10 +211,29 @@ pub(super) fn window(endpoint: Endpoint, body: &[u8]) -> Result<PriceWindow, Mar
     })
 }
 
-/// Parses a `/timeseries` body.
-pub(super) fn timeseries(body: &[u8]) -> Result<Series, MarketDataError> {
+/// Parses a `/timeseries` body for the `requested` item. A response for a
+/// different item, a zero timestep or a start after the end is malformed.
+pub(super) fn timeseries(body: &[u8], requested: ItemId) -> Result<Series, MarketDataError> {
     const ENDPOINT: Endpoint = Endpoint::Timeseries;
     let parsed: SeriesBody = from_json(ENDPOINT, body)?;
+    if ItemId(parsed.item_id) != requested {
+        return Err(malformed(
+            ENDPOINT,
+            format!(
+                "response is for item {} but item {} was requested",
+                parsed.item_id, requested.0
+            ),
+        ));
+    }
+    if parsed.timestep == 0 {
+        return Err(malformed(ENDPOINT, "timestep is zero"));
+    }
+    if parsed.start_timestamp > parsed.end_timestamp {
+        return Err(malformed(
+            ENDPOINT,
+            "start timestamp is after end timestamp",
+        ));
+    }
     let points = parsed
         .data
         .iter()
@@ -261,7 +296,7 @@ mod tests {
 
     #[test]
     fn latest_keeps_one_sided_and_never_seen_items_distinct() {
-        let items = latest(LATEST.as_bytes()).unwrap();
+        let items = latest(LATEST.as_bytes(), None).unwrap();
         assert_eq!(items.len(), 3);
 
         let high_only = items[&ItemId(4151)];
@@ -284,18 +319,24 @@ mod tests {
 
     #[test]
     fn latest_omits_items_the_api_omits() {
-        let items = latest(br#"{"data":{}}"#).unwrap();
+        let items = latest(br#"{"data":{}}"#, None).unwrap();
         assert!(items.is_empty());
-        assert!(!latest(LATEST.as_bytes()).unwrap().contains_key(&ItemId(1)));
+        assert!(
+            !latest(LATEST.as_bytes(), None)
+                .unwrap()
+                .contains_key(&ItemId(1))
+        );
     }
 
     #[test]
     fn latest_rejects_a_price_without_its_time_and_vice_versa() {
         assert!(is_malformed(&latest(
-            br#"{"data":{"1":{"high":5,"highTime":null,"low":null,"lowTime":null}}}"#
+            br#"{"data":{"1":{"high":5,"highTime":null,"low":null,"lowTime":null}}}"#,
+            None
         )));
         assert!(is_malformed(&latest(
-            br#"{"data":{"1":{"high":null,"highTime":5,"low":null,"lowTime":null}}}"#
+            br#"{"data":{"1":{"high":null,"highTime":5,"low":null,"lowTime":null}}}"#,
+            None
         )));
     }
 
@@ -347,19 +388,76 @@ mod tests {
         };
         assert_eq!(parse("0").unwrap().hundredths, 0);
         assert_eq!(parse("0.07").unwrap().hundredths, 7);
+        assert_eq!(parse("0.10").unwrap().hundredths, 10);
+        assert_eq!(parse("227.22").unwrap().hundredths, 22_722);
+        assert_eq!(parse("1000.0").unwrap().hundredths, 100_000);
         assert_eq!(parse("5795000").unwrap().hundredths, 579_500_000);
         assert!(is_malformed(&parse("1.234")));
         assert!(is_malformed(&parse("-1")));
-        // serde_json reads exponent forms as f64 and prints them back; exact ones
-        // are accepted, ones that print with an exponent are rejected.
-        assert_eq!(parse("1e3").unwrap().hundredths, 100_000);
-        assert!(is_malformed(&parse("1e21")));
         assert!(is_malformed(&parse("184467440737095517")));
     }
 
     #[test]
+    fn over_precise_averages_are_not_silently_rounded_to_a_valid_value() {
+        // As an f64 this literal is exactly 227.22, so without exact lexemes it
+        // would be accepted as 22,722 hundredths.
+        let body = br#"{"data":{"1":{"avgHighPrice":227.2200000000000000001,"highPriceVolume":1,"avgLowPrice":null,"lowPriceVolume":0}}}"#;
+        assert!(is_malformed(&window(Endpoint::FiveMinute, body)));
+    }
+
+    #[test]
+    fn exponent_notation_is_rejected_not_interpreted() {
+        let number: Number = serde_json::from_str("1e3").unwrap();
+        assert!(is_malformed(&average_price(Endpoint::OneHour, &number)));
+        let number: Number = serde_json::from_str("1.5E2").unwrap();
+        assert!(is_malformed(&average_price(Endpoint::OneHour, &number)));
+    }
+
+    #[test]
+    fn scoped_latest_accepts_the_requested_item_or_none_but_not_another() {
+        let requested = Some(ItemId(4151));
+        let items = latest(LATEST.as_bytes(), None).unwrap();
+        assert_eq!(items.len(), 3, "unscoped responses may hold many items");
+
+        let only_requested =
+            br#"{"data":{"4151":{"high":1,"highTime":2,"low":null,"lowTime":null}}}"#;
+        assert_eq!(latest(only_requested, requested).unwrap().len(), 1);
+
+        let absent = br#"{"data":{}}"#;
+        assert!(latest(absent, requested).unwrap().is_empty());
+
+        assert!(is_malformed(&latest(LATEST.as_bytes(), requested)));
+        let other = br#"{"data":{"2":{"high":1,"highTime":2,"low":null,"lowTime":null}}}"#;
+        assert!(is_malformed(&latest(other, requested)));
+    }
+
+    #[test]
+    fn timeseries_for_another_item_is_rejected() {
+        assert!(is_malformed(&timeseries(TIMESERIES.as_bytes(), ItemId(2))));
+    }
+
+    #[test]
+    fn timeseries_with_zero_timestep_or_reversed_range_is_rejected() {
+        let with = |start: u64, end: u64, step: u64| {
+            format!(
+                r#"{{"data":[],"itemId":4151,"startTimestamp":{start},"endTimestamp":{end},"timestep":{step}}}"#
+            )
+        };
+        assert!(timeseries(with(10, 20, 300).as_bytes(), ItemId(4151)).is_ok());
+        assert!(timeseries(with(10, 10, 300).as_bytes(), ItemId(4151)).is_ok());
+        assert!(is_malformed(&timeseries(
+            with(10, 20, 0).as_bytes(),
+            ItemId(4151)
+        )));
+        assert!(is_malformed(&timeseries(
+            with(21, 20, 300).as_bytes(),
+            ItemId(4151)
+        )));
+    }
+
+    #[test]
     fn timeseries_parses_header_and_points() {
-        let series = timeseries(TIMESERIES.as_bytes()).unwrap();
+        let series = timeseries(TIMESERIES.as_bytes(), ItemId(4151)).unwrap();
         assert_eq!(series.item, ItemId(4151));
         assert_eq!(series.starts_at, UnixSeconds(1_795_602_300));
         assert_eq!(series.ends_at, UnixSeconds(1_795_688_700));
@@ -389,15 +487,17 @@ mod tests {
 
     #[test]
     fn invalid_bodies_are_malformed_not_empty() {
-        assert!(is_malformed(&latest(b"")));
-        assert!(is_malformed(&latest(b"<html>blocked</html>")));
-        assert!(is_malformed(&latest(br#"{"data":[]}"#)));
-        assert!(is_malformed(&latest(br#"{"nodata":{}}"#)));
+        assert!(is_malformed(&latest(b"", None)));
+        assert!(is_malformed(&latest(b"<html>blocked</html>", None)));
+        assert!(is_malformed(&latest(br#"{"data":[]}"#, None)));
+        assert!(is_malformed(&latest(br#"{"nodata":{}}"#, None)));
         assert!(is_malformed(&latest(
-            br#"{"data":{"not-an-id":{"high":null,"highTime":null,"low":null,"lowTime":null}}}"#
+            br#"{"data":{"not-an-id":{"high":null,"highTime":null,"low":null,"lowTime":null}}}"#,
+            None
         )));
         assert!(is_malformed(&latest(
-            br#"{"data":{"1":{"high":-5,"highTime":1,"low":null,"lowTime":null}}}"#
+            br#"{"data":{"1":{"high":-5,"highTime":1,"low":null,"lowTime":null}}}"#,
+            None
         )));
         assert!(is_malformed(&window(
             Endpoint::FiveMinute,
@@ -407,7 +507,7 @@ mod tests {
             Endpoint::FiveMinute,
             br#"{"data":{"1":{"avgHighPrice":1,"avgLowPrice":null,"lowPriceVolume":0}}}"#
         )));
-        assert!(is_malformed(&timeseries(br#"{"data":[]}"#)));
+        assert!(is_malformed(&timeseries(br#"{"data":[]}"#, ItemId(4151))));
         assert!(is_malformed(&mapping(br#"{"id":1}"#)));
         assert!(is_malformed(&mapping(br#"[{"id":1}]"#)));
     }

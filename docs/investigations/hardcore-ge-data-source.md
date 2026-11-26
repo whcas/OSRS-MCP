@@ -139,6 +139,8 @@ The client in `src/market/` follows the sketch above with these differences:
 - `reqwest` 0.13 puts query-string support behind a feature, so query parameters are built with `Url::query_pairs_mut`.
 - The mapping response is parsed with only `id` and `name` required, because which fields can be absent was not verified.
 - Fixtures in `tests/fixtures/hardcore_ge/` are partly synthetic; see the README there.
+- The client rejects any base URL other than the real `osrs-hc` endpoint or a loopback test server, records the exact source URL in provenance, validates scoped responses against the request, and reports observations dated in the future as such. These follow review feedback and are covered by regression tests.
+- Live verification with `scripts/verify_hardcore_api.py` is still outstanding; #29 stays a draft until its output has been reviewed.
 
 ## Trade-offs and recommendation
 

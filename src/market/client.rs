@@ -29,13 +29,14 @@ const DEFAULT_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 /// Settings for [`HardcoreClient`].
 ///
 /// The defaults target the real Hardcore endpoint with an identifying
-/// `User-Agent`. Overriding `base_url` exists for tests and mirrors; it does
-/// not change which [`WorldType`] results are labelled with, so only point it
-/// at Hardcore data.
+/// `User-Agent`. `base_url` is checked at construction: it must be
+/// [`HARDCORE_BASE_URL`], or an `http` loopback URL (for a local test server)
+/// whose path ends in `osrs-hc`. Any other origin, and the standard-world
+/// path, is rejected, so results cannot be labelled Hardcore while coming
+/// from somewhere else.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    /// Base URL ending in the world's path segment, for example
-    /// [`HARDCORE_BASE_URL`].
+    /// Base URL; see the type documentation for what is accepted.
     pub base_url: String,
     /// Value of the `User-Agent` header. Must not be blank. The API operator
     /// asks for a descriptive value and blocks generic client names.
@@ -70,8 +71,11 @@ impl Default for ClientConfig {
 /// Why a client could not be constructed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
-    /// The base URL did not parse or is not `http` or `https`.
+    /// The base URL did not parse.
     InvalidBaseUrl,
+    /// The base URL is not the Hardcore endpoint or a loopback test server
+    /// whose path ends in `osrs-hc`.
+    NotHardcoreEndpoint,
     /// The `User-Agent` was blank.
     BlankUserAgent,
     /// The underlying HTTP client could not be built.
@@ -81,7 +85,10 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::InvalidBaseUrl => "base URL is not a valid http or https URL",
+            Self::InvalidBaseUrl => "base URL is not a valid URL",
+            Self::NotHardcoreEndpoint => {
+                "base URL is not the Hardcore endpoint or a loopback osrs-hc test server"
+            }
             Self::BlankUserAgent => "user agent must not be blank",
             Self::HttpClient => "HTTP client could not be built",
         })
@@ -152,8 +159,8 @@ impl HardcoreClient {
     ///
     /// Returns [`MarketDataError`] on transport, HTTP, size or parse failure.
     pub async fn mapping(&self) -> Result<Observed<Vec<ItemInfo>>, MarketDataError> {
-        let body = self.get(Endpoint::Mapping, &[]).await?;
-        Ok(self.observed(Endpoint::Mapping, parse::mapping(&body)?))
+        let (url, body) = self.get(Endpoint::Mapping, &[]).await?;
+        Ok(self.observed(Endpoint::Mapping, &url, parse::mapping(&body)?))
     }
 
     /// Latest observed trades (`/latest`), for one item or, with `None`, all
@@ -170,8 +177,8 @@ impl HardcoreClient {
             .map(|item| ("id", item.0.to_string()))
             .into_iter()
             .collect();
-        let body = self.get(Endpoint::Latest, &query).await?;
-        Ok(self.observed(Endpoint::Latest, parse::latest(&body)?))
+        let (url, body) = self.get(Endpoint::Latest, &query).await?;
+        Ok(self.observed(Endpoint::Latest, &url, parse::latest(&body, item)?))
     }
 
     /// Averages and volumes for every item over one window (`/5m` or `/1h`).
@@ -190,8 +197,8 @@ impl HardcoreClient {
             .map(|start| ("timestamp", start.0.to_string()))
             .into_iter()
             .collect();
-        let body = self.get(endpoint, &query).await?;
-        Ok(self.observed(endpoint, parse::window(endpoint, &body)?))
+        let (url, body) = self.get(endpoint, &query).await?;
+        Ok(self.observed(endpoint, &url, parse::window(endpoint, &body)?))
     }
 
     /// Price history for one item (`/timeseries`).
@@ -208,11 +215,11 @@ impl HardcoreClient {
             ("id", item.0.to_string()),
             ("lookback", lookback.as_query().to_owned()),
         ];
-        let body = self.get(Endpoint::Timeseries, &query).await?;
-        Ok(self.observed(Endpoint::Timeseries, parse::timeseries(&body)?))
+        let (url, body) = self.get(Endpoint::Timeseries, &query).await?;
+        Ok(self.observed(Endpoint::Timeseries, &url, parse::timeseries(&body, item)?))
     }
 
-    fn observed<T>(&self, endpoint: Endpoint, value: T) -> Observed<T> {
+    fn observed<T>(&self, endpoint: Endpoint, url: &Url, value: T) -> Observed<T> {
         let retrieved_at = (self.clock)()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
@@ -221,17 +228,19 @@ impl HardcoreClient {
             provenance: Provenance {
                 world_type: WorldType::Hardcore,
                 endpoint,
+                source_url: url.to_string(),
                 retrieved_at: UnixSeconds(retrieved_at),
             },
         }
     }
 
-    /// One bounded GET. Returns the body of a successful response.
+    /// One bounded GET. Returns the requested URL and the body of a
+    /// successful response.
     async fn get(
         &self,
         endpoint: Endpoint,
         query: &[(&str, String)],
-    ) -> Result<Vec<u8>, MarketDataError> {
+    ) -> Result<(Url, Vec<u8>), MarketDataError> {
         let transport = |error: &reqwest::Error| MarketDataError::Transport {
             endpoint,
             kind: transport_kind(error),
@@ -244,7 +253,7 @@ impl HardcoreClient {
         let url = self.endpoint_url(endpoint, query);
         let mut response = self
             .http
-            .get(url)
+            .get(url.clone())
             .send()
             .await
             .map_err(|error| transport(&error))?;
@@ -270,7 +279,7 @@ impl HardcoreClient {
             }
             body.extend_from_slice(&chunk);
         }
-        Ok(body)
+        Ok((url, body))
     }
 
     fn endpoint_url(&self, endpoint: Endpoint, query: &[(&str, String)]) -> Url {
@@ -285,17 +294,37 @@ impl HardcoreClient {
     }
 }
 
-/// Parses the base URL and guarantees a trailing slash on its path.
+/// Parses the base URL, guarantees a trailing slash on its path, and accepts
+/// only Hardcore origins (see [`ClientConfig`]).
 fn parse_base_url(text: &str) -> Result<Url, ConfigError> {
     let mut url = Url::parse(text).map_err(|_| ConfigError::InvalidBaseUrl)?;
-    if !matches!(url.scheme(), "http" | "https") || url.cannot_be_a_base() {
+    if url.cannot_be_a_base() {
         return Err(ConfigError::InvalidBaseUrl);
     }
     if !url.path().ends_with('/') {
         let path = format!("{}/", url.path());
         url.set_path(&path);
     }
-    Ok(url)
+    if is_hardcore_origin(&url) {
+        Ok(url)
+    } else {
+        Err(ConfigError::NotHardcoreEndpoint)
+    }
+}
+
+fn is_hardcore_origin(url: &Url) -> bool {
+    let plain = url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none();
+    let real = url.scheme() == "https"
+        && url.host_str() == Some("prices.runescape.wiki")
+        && url.port().is_none()
+        && url.path() == "/api/v2/osrs-hc/";
+    let loopback = url.scheme() == "http"
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+        && url.path().ends_with("/osrs-hc/");
+    plain && (real || loopback)
 }
 
 fn transport_kind(error: &reqwest::Error) -> TransportKind {
@@ -353,7 +382,7 @@ mod tests {
         assert_eq!(with("not a url", "ua"), Err(ConfigError::InvalidBaseUrl));
         assert_eq!(
             with("file:///tmp/x/", "ua"),
-            Err(ConfigError::InvalidBaseUrl)
+            Err(ConfigError::NotHardcoreEndpoint)
         );
         assert_eq!(with("mailto:a@b.c", "ua"), Err(ConfigError::InvalidBaseUrl));
         assert_eq!(
@@ -361,5 +390,43 @@ mod tests {
             Err(ConfigError::BlankUserAgent)
         );
         assert_eq!(with(HARDCORE_BASE_URL, "ua"), Ok(()));
+    }
+
+    #[test]
+    fn only_hardcore_origins_can_be_labelled_hardcore() {
+        let rejected = [
+            // Standard-world path on the real host.
+            "https://prices.runescape.wiki/api/v2/osrs/",
+            "https://prices.runescape.wiki/api/v1/osrs/",
+            "https://prices.runescape.wiki/api/v2/osrs-hc/extra/",
+            // Right path, wrong host.
+            "https://example.com/api/v2/osrs-hc/",
+            "https://prices.runescape.wiki.example.com/api/v2/osrs-hc/",
+            // Plain http to the real host, credentials, port, query.
+            "http://prices.runescape.wiki/api/v2/osrs-hc/",
+            "https://user@prices.runescape.wiki/api/v2/osrs-hc/",
+            "https://prices.runescape.wiki:8443/api/v2/osrs-hc/",
+            "https://prices.runescape.wiki/api/v2/osrs-hc/?x=1",
+            // Loopback with a standard-world path, or https loopback.
+            "http://127.0.0.1:8080/api/v2/osrs/",
+            "http://127.0.0.1:8080/",
+            "file:///tmp/osrs-hc/",
+        ];
+        for base_url in rejected {
+            assert_eq!(
+                parse_base_url(base_url).map(|_| ()),
+                Err(ConfigError::NotHardcoreEndpoint),
+                "{base_url}"
+            );
+        }
+        for base_url in [
+            "https://prices.runescape.wiki/api/v2/osrs-hc",
+            "https://prices.runescape.wiki/api/v2/osrs-hc/",
+            "http://127.0.0.1:8080/anything/osrs-hc/",
+            "http://localhost:3000/osrs-hc",
+            "http://[::1]:3000/osrs-hc/",
+        ] {
+            assert!(parse_base_url(base_url).is_ok(), "{base_url}");
+        }
     }
 }
