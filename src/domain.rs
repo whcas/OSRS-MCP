@@ -79,11 +79,14 @@ impl Gp {
         }
     }
 
-    /// Multiplies by a quantity, or `None` if the product does not fit.
+    /// Multiplies by a quantity, or `None` if the product does not fit in
+    /// [`Gp`]. The product is evaluated exactly, so a large quantity succeeds
+    /// whenever the result is representable (for example, `0 * u64::MAX`).
     #[must_use]
     pub fn checked_mul_quantity(self, quantity: Quantity) -> Option<Self> {
-        let count = i64::try_from(quantity.get()).ok()?;
-        self.0.checked_mul(count).map(Self)
+        // Every i64 x u64 product fits in i128, so this step cannot overflow.
+        let product = i128::from(self.0) * i128::from(quantity.get());
+        i64::try_from(product).ok().map(Self)
     }
 }
 
@@ -224,14 +227,43 @@ mod tests {
     fn gp_checked_multiplication_by_quantity() {
         assert_eq!(Gp::new(7).checked_mul_quantity(qty(3)), Some(Gp::new(21)));
         assert_eq!(Gp::new(-7).checked_mul_quantity(qty(3)), Some(Gp::new(-21)));
-        assert_eq!(Gp::new(2).checked_mul_quantity(qty(i64::MAX as u64)), None);
-        // A quantity that does not fit in i64 cannot be applied at all, even
-        // to a zero amount, so the failure never depends on the price.
-        assert_eq!(Gp::new(0).checked_mul_quantity(qty(u64::MAX)), None);
+    }
+
+    #[test]
+    fn gp_multiplication_succeeds_whenever_the_product_fits() {
+        let beyond_i64 = i64::MAX as u64 + 1;
+        // A quantity above i64::MAX is still valid if the product fits.
+        assert_eq!(
+            Gp::new(0).checked_mul_quantity(qty(u64::MAX)),
+            Some(Gp::new(0))
+        );
+        assert_eq!(
+            Gp::new(-1).checked_mul_quantity(qty(beyond_i64)),
+            Some(Gp::new(i64::MIN))
+        );
         assert_eq!(
             Gp::new(1).checked_mul_quantity(qty(i64::MAX as u64)),
             Some(Gp::new(i64::MAX))
         );
+        assert_eq!(
+            Gp::new(i64::MIN).checked_mul_quantity(qty(1)),
+            Some(Gp::new(i64::MIN))
+        );
+    }
+
+    #[test]
+    fn gp_multiplication_reports_genuine_overflow() {
+        assert_eq!(Gp::new(2).checked_mul_quantity(qty(i64::MAX as u64)), None);
+        assert_eq!(
+            Gp::new(1).checked_mul_quantity(qty(i64::MAX as u64 + 1)),
+            None
+        );
+        assert_eq!(
+            Gp::new(-2).checked_mul_quantity(qty(i64::MAX as u64 + 1)),
+            None
+        );
+        assert_eq!(Gp::new(i64::MAX).checked_mul_quantity(qty(u64::MAX)), None);
+        assert_eq!(Gp::new(i64::MIN).checked_mul_quantity(qty(2)), None);
     }
 
     #[test]
@@ -283,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn identifiers_and_times_order_and_hash_by_value() {
+    fn identifiers_and_times_order_by_value() {
         use std::collections::BTreeSet;
         let items: BTreeSet<_> = [ItemId(4151), ItemId(2), ItemId(4151)].into();
         assert_eq!(
@@ -291,6 +323,15 @@ mod tests {
             [ItemId(2), ItemId(4151)]
         );
         assert!(UnixSeconds(1) < UnixSeconds(2));
+    }
+
+    #[test]
+    fn identifiers_and_times_hash_by_value() {
+        use std::collections::HashSet;
+        let items: HashSet<_> = [ItemId(4151), ItemId(2), ItemId(4151)].into();
+        assert_eq!(items.len(), 2);
+        let times: HashSet<_> = [UnixSeconds(5), UnixSeconds(5)].into();
+        assert_eq!(times.len(), 1);
     }
 
     #[test]
