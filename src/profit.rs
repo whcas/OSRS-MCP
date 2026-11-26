@@ -62,75 +62,10 @@
 //! - ROI is `None` when the acquisition cost is zero, since it is undefined
 //!   rather than zero.
 
-use std::fmt;
+use crate::domain::{Gp, Quantity};
 
 /// Divisor converting basis points to a fraction.
 const BASIS_POINTS_PER_UNIT: i128 = 10_000;
-
-/// A signed amount of coins (GP).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Gp(i64);
-
-impl Gp {
-    /// Wraps a whole number of coins.
-    #[must_use]
-    pub const fn new(amount: i64) -> Self {
-        Self(amount)
-    }
-
-    /// Returns the amount in coins.
-    #[must_use]
-    pub const fn get(self) -> i64 {
-        self.0
-    }
-
-    fn checked_add(self, other: Self) -> Result<Self, ProfitError> {
-        self.0
-            .checked_add(other.0)
-            .map(Self)
-            .ok_or(ProfitError::Overflow)
-    }
-
-    fn checked_sub(self, other: Self) -> Result<Self, ProfitError> {
-        self.0
-            .checked_sub(other.0)
-            .map(Self)
-            .ok_or(ProfitError::Overflow)
-    }
-
-    fn checked_mul_quantity(self, quantity: Quantity) -> Result<Self, ProfitError> {
-        let quantity = i64::try_from(quantity.0).map_err(|_| ProfitError::Overflow)?;
-        self.0
-            .checked_mul(quantity)
-            .map(Self)
-            .ok_or(ProfitError::Overflow)
-    }
-}
-
-/// A strictly positive item count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Quantity(u64);
-
-impl Quantity {
-    /// Creates a quantity, rejecting zero.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ProfitError::ZeroQuantity`] if `count` is zero.
-    pub const fn new(count: u64) -> Result<Self, ProfitError> {
-        if count == 0 {
-            Err(ProfitError::ZeroQuantity)
-        } else {
-            Ok(Self(count))
-        }
-    }
-
-    /// Returns the count.
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-}
 
 /// One line of a transaction: a quantity of items at a unit price.
 ///
@@ -254,42 +189,27 @@ pub struct Outcome {
 }
 
 /// Why a transaction could not be evaluated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ProfitError {
-    /// A quantity of zero was supplied.
-    ZeroQuantity,
     /// A unit price was negative.
+    #[error("unit price must not be negative")]
     NegativePrice,
     /// A unit price was missing (as opposed to zero).
+    #[error("unit price is missing")]
     MissingPrice,
     /// The transaction has no input lines.
+    #[error("transaction has no inputs")]
     NoInputs,
     /// The transaction has no output lines.
+    #[error("transaction has no outputs")]
     NoOutputs,
     /// A fee rate above 10,000 basis points or a negative fee cap.
+    #[error("fee policy is invalid: rate must be at most 10000 bp and cap non-negative")]
     InvalidFeePolicy,
     /// An intermediate value did not fit in a signed 64-bit amount.
+    #[error("amount overflows a signed 64-bit GP value")]
     Overflow,
 }
-
-impl fmt::Display for ProfitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let message = match self {
-            Self::ZeroQuantity => "quantity must be greater than zero",
-            Self::NegativePrice => "unit price must not be negative",
-            Self::MissingPrice => "unit price is missing",
-            Self::NoInputs => "transaction has no inputs",
-            Self::NoOutputs => "transaction has no outputs",
-            Self::InvalidFeePolicy => {
-                "fee policy is invalid: rate must be at most 10000 bp and cap non-negative"
-            }
-            Self::Overflow => "amount overflows a signed 64-bit GP value",
-        };
-        f.write_str(message)
-    }
-}
-
-impl std::error::Error for ProfitError {}
 
 /// Evaluates a transaction.
 ///
@@ -308,12 +228,10 @@ pub fn evaluate(transaction: &Transaction) -> Result<Outcome, ProfitError> {
 
     let acquisition_cost = total_value(&transaction.inputs)?;
     let gross_revenue = total_value(&transaction.outputs)?;
-    let gross_profit = gross_revenue.checked_sub(acquisition_cost)?;
+    let gross_profit = subtract(gross_revenue, acquisition_cost)?;
 
     let fees = total_fees(&transaction.outputs, transaction.fees)?;
-    let net_profit = fees
-        .map(|fees| gross_profit.checked_sub(fees))
-        .transpose()?;
+    let net_profit = fees.map(|fees| subtract(gross_profit, fees)).transpose()?;
     let roi = net_profit.and_then(|net| return_on_investment(net, acquisition_cost));
 
     Ok(Outcome {
@@ -353,9 +271,23 @@ const fn unit_price(line: &Line) -> Result<Gp, ProfitError> {
     }
 }
 
+fn add(a: Gp, b: Gp) -> Result<Gp, ProfitError> {
+    a.checked_add(b).ok_or(ProfitError::Overflow)
+}
+
+fn subtract(a: Gp, b: Gp) -> Result<Gp, ProfitError> {
+    a.checked_sub(b).ok_or(ProfitError::Overflow)
+}
+
+fn times_quantity(amount: Gp, quantity: Quantity) -> Result<Gp, ProfitError> {
+    amount
+        .checked_mul_quantity(quantity)
+        .ok_or(ProfitError::Overflow)
+}
+
 fn total_value(lines: &[Line]) -> Result<Gp, ProfitError> {
     lines.iter().try_fold(Gp::new(0), |total, line| {
-        total.checked_add(unit_price(line)?.checked_mul_quantity(line.quantity)?)
+        add(total, times_quantity(unit_price(line)?, line.quantity)?)
     })
 }
 
@@ -371,7 +303,7 @@ fn total_fees(sold: &[Line], policy: FeePolicy) -> Result<Option<Gp>, ProfitErro
             .iter()
             .try_fold(Gp::new(0), |total, line| {
                 let per_unit = fee_per_unit(unit_price(line)?, rate_basis_points, cap_per_unit)?;
-                total.checked_add(per_unit.checked_mul_quantity(line.quantity)?)
+                add(total, times_quantity(per_unit, line.quantity)?)
             })
             .map(Some),
     }
@@ -638,11 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_quantity_is_rejected() {
-        assert_eq!(Quantity::new(0), Err(ProfitError::ZeroQuantity));
-    }
-
-    #[test]
     fn missing_price_is_an_error_not_zero() {
         let missing_sell = Transaction::trade(Some(gp(10)), None, qty(1), FeePolicy::NoFees);
         assert_eq!(evaluate(&missing_sell), Err(ProfitError::MissingPrice));
@@ -719,6 +646,17 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_quantity_is_fine_when_the_product_fits() {
+        // Boundary correction from adopting `domain::Gp`: a quantity above
+        // i64::MAX used to be reported as overflow even at a price of zero.
+        let huge_quantity = Quantity::new(u64::MAX).unwrap();
+        let free = Transaction::trade(Some(gp(0)), Some(gp(0)), huge_quantity, FeePolicy::NoFees);
+        let outcome = evaluate(&free).unwrap();
+        assert_eq!(outcome.acquisition_cost, gp(0));
+        assert_eq!(outcome.net_profit, Some(gp(0)));
+    }
+
+    #[test]
     fn summing_lines_can_overflow() {
         let recipe = Transaction::recipe(
             vec![
@@ -740,9 +678,25 @@ mod tests {
 
     #[test]
     fn errors_have_readable_messages() {
-        assert_eq!(
-            ProfitError::MissingPrice.to_string(),
-            "unit price is missing"
-        );
+        let messages = [
+            (
+                ProfitError::NegativePrice,
+                "unit price must not be negative",
+            ),
+            (ProfitError::MissingPrice, "unit price is missing"),
+            (ProfitError::NoInputs, "transaction has no inputs"),
+            (ProfitError::NoOutputs, "transaction has no outputs"),
+            (
+                ProfitError::InvalidFeePolicy,
+                "fee policy is invalid: rate must be at most 10000 bp and cap non-negative",
+            ),
+            (
+                ProfitError::Overflow,
+                "amount overflows a signed 64-bit GP value",
+            ),
+        ];
+        for (error, message) in messages {
+            assert_eq!(error.to_string(), message);
+        }
     }
 }
