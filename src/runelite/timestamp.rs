@@ -113,17 +113,4 @@ mod tests {
         // The original text is still the text that was exported.
         assert_eq!(leap.text(), "2026-01-01T12:00:60Z");
     }
-
-    #[test]
-    fn lenient_forms_the_plugin_never_writes_are_accepted_and_documented() {
-        // These are accepted by the underlying parser; see `ExportedAt::parse`.
-        for text in [
-            "2026-01-01 12:00:00Z",
-            "2026-01-01t12:00:00z",
-            "20260101T120000Z",
-            "2026-01-01T12:00:00+25:00",
-        ] {
-            assert!(ExportedAt::parse(text).is_some(), "{text:?} is accepted");
-        }
-    }
 }

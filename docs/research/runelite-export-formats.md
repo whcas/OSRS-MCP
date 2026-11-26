@@ -123,6 +123,7 @@ Aligned with the maintainer's clarifications on #15 and #19.
 - `real_level` is an integer in `1..=99` for **every** skill, including skill names the importer does not recognise; the maintainer has accepted 99 as the hard cap for real levels. `experience` is an integer in `0..=200_000_000`. Anything else is a typed error.
 - A level inconsistent with the standard experience table is a **warning, not an error**, applied only to recognised skills, where the experience table is known to apply. Unknown skills are kept and reported with a warning, and are not checked against the table.
 - Missing or non-object `stats`, wrong types and duplicate skills are typed errors. Truncated input is reported separately (retryable, see "Write semantics"), as is other invalid JSON (not automatically retryable).
+- Errors never carry text from the file: a skill is named in an error only if the importer recognises it, otherwise it is identified by its 1-based position in `stats`. A skill whose value is not an object is its own error.
 - Skill names are parsed into a known set with an explicit unknown variant, so new skills do not fail the import. Whether unknown skills are kept or only reported is for #19 to decide and document.
 
 **Unknown fields.** Ignored at every level. There is no declared format version to reject.

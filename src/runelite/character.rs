@@ -3,8 +3,8 @@
 //! Decisions are in `docs/research/runelite-export-formats.md`. In short:
 //! unknown fields are ignored, `boosted_level`, `session_id` and
 //! `account_name` are never read or retained, a level that disagrees with
-//! experience is a warning, and error values never contain input values apart
-//! from a skill name cut to [`MAX_NAME_CHARS`] characters.
+//! experience is a warning, and error values never contain input values: a
+//! skill is named only if the importer recognises it, otherwise by its position.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -42,10 +42,11 @@ pub enum Warning {
         /// The level implied by the experience table.
         implied_level: u8,
     },
-    /// A skill name this importer does not know. It is kept, unchecked.
+    /// A skill this importer does not recognise. It is kept, unchecked; look it
+    /// up in [`CharacterExport::skills`] by position.
     UnknownSkill {
-        /// The name as exported.
-        name: String,
+        /// Its 1-based position in `stats`.
+        position: usize,
     },
 }
 
@@ -93,29 +94,22 @@ impl CharacterExport {
 }
 
 /// Why a skill value was rejected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SkillValueProblem {
     /// Not a non-negative JSON integer (a string, a fraction, a negative
     /// number, `null`, or too large to represent).
+    #[error("is not a non-negative integer")]
     NotAnInteger,
     /// An integer outside the allowed range.
+    #[error("is out of range")]
     OutOfRange,
-}
-
-impl fmt::Display for SkillValueProblem {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::NotAnInteger => "is not a non-negative integer",
-            Self::OutOfRange => "is out of range",
-        })
-    }
 }
 
 /// Why `character.json` could not be imported.
 ///
-/// No variant carries an input value other than a skill name, which is cut to
-/// [`MAX_NAME_CHARS`] characters so that a hostile file cannot produce an
-/// unbounded diagnostic.
+/// No variant carries input text. A skill is identified by its name only if the
+/// importer recognises it, otherwise by its position in `stats`, so an
+/// unexpected key in the file never reaches a message, log line or `Debug`.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CharacterParseError {
     /// The input ended inside a JSON value, or was empty. The plugin does not
@@ -144,23 +138,29 @@ pub enum CharacterParseError {
     #[error("`stats` contains no skills")]
     NoSkills,
     /// A skill appears twice in `stats`.
-    #[error("skill `{name}` appears more than once")]
+    #[error("{skill} appears more than once")]
     DuplicateSkill {
-        /// The skill name.
-        name: String,
+        /// The skill, named as described on [`CharacterParseError`].
+        skill: String,
+    },
+    /// A skill's value in `stats` is not a JSON object.
+    #[error("{skill} is not an object")]
+    SkillNotAnObject {
+        /// The skill, named as described on [`CharacterParseError`].
+        skill: String,
     },
     /// A skill lacks a required value.
-    #[error("skill `{skill}` is missing `{field}`")]
+    #[error("{skill} is missing `{field}`")]
     MissingSkillField {
-        /// The skill name.
+        /// The skill, named as described on [`CharacterParseError`].
         skill: String,
         /// The missing field.
         field: &'static str,
     },
     /// A skill value is not acceptable.
-    #[error("skill `{skill}` field `{field}` {problem}")]
+    #[error("{skill} field `{field}` {problem}")]
     InvalidSkillValue {
-        /// The skill name.
+        /// The skill, named as described on [`CharacterParseError`].
         skill: String,
         /// The field with the bad value.
         field: &'static str,
@@ -210,7 +210,7 @@ pub fn parse_character_export(bytes: &[u8]) -> Result<CharacterExport, Character
     let skills = read_skills(&fields)?;
     // Warnings are advice about records that already parsed; they never decide
     // whether the import succeeds.
-    let warnings = skills.iter().filter_map(warning_for).collect();
+    let warnings = skills.iter().enumerate().filter_map(warning_for).collect();
 
     Ok(CharacterExport {
         exported_at,
@@ -270,47 +270,55 @@ fn read_skills(fields: &Fields) -> Result<Vec<SkillRecord>, CharacterParseError>
 
     let mut seen = HashSet::new();
     let mut skills = Vec::with_capacity(entries.len());
-    for (name, value) in &entries {
+    for (index, (name, value)) in entries.iter().enumerate() {
+        let skill = Skill::from_name(name);
+        let label = skill_label(&skill, index + 1);
         if !seen.insert(name.as_str()) {
-            return Err(CharacterParseError::DuplicateSkill {
-                name: diagnostic_name(name),
-            });
+            return Err(CharacterParseError::DuplicateSkill { skill: label });
         }
-        skills.push(read_skill(name, value)?);
+        skills.push(read_skill(skill, &label, value)?);
     }
     Ok(skills)
 }
 
-fn read_skill(name: &str, value: &Value) -> Result<SkillRecord, CharacterParseError> {
+fn read_skill(
+    skill: Skill,
+    label: &str,
+    value: &Value,
+) -> Result<SkillRecord, CharacterParseError> {
     let object = value
         .as_object()
-        .ok_or(CharacterParseError::UnexpectedShape)?;
-    let real_level = read_integer(name, "real_level", object.get("real_level"), 1..=MAX_LEVEL)?;
+        .ok_or_else(|| CharacterParseError::SkillNotAnObject {
+            skill: label.to_owned(),
+        })?;
+    let real_level = read_integer(label, "real_level", object.get("real_level"), 1..=MAX_LEVEL)?;
     let experience = read_integer(
-        name,
+        label,
         "experience",
         object.get("experience"),
         0..=MAX_EXPERIENCE,
     )?;
     Ok(SkillRecord {
-        skill: Skill::from_name(name),
+        skill,
         real_level,
         experience,
     })
 }
 
-/// The longest skill name, in characters, that an error will carry.
-const MAX_NAME_CHARS: usize = 64;
-
-/// A skill name as it may appear in an error: bounded, because the name comes
-/// from the file.
-fn diagnostic_name(name: &str) -> String {
-    name.chars().take(MAX_NAME_CHARS).collect()
+/// How an error names a skill: by name if the importer recognises it, otherwise
+/// by its 1-based position in `stats`. An unrecognised name is file content and
+/// must not reach a diagnostic.
+fn skill_label(skill: &Skill, position: usize) -> String {
+    if skill.is_known() {
+        skill.name().to_owned()
+    } else {
+        format!("unrecognised skill at position {position}")
+    }
 }
 
 /// The integer in `value`, which must be present and within `range`.
 fn read_integer<T>(
-    skill: &str,
+    label: &str,
     field: &'static str,
     value: Option<&Value>,
     range: RangeInclusive<T>,
@@ -319,12 +327,12 @@ where
     T: TryFrom<u64> + PartialOrd,
 {
     let invalid = |problem| CharacterParseError::InvalidSkillValue {
-        skill: diagnostic_name(skill),
+        skill: label.to_owned(),
         field,
         problem,
     };
     let value = value.ok_or_else(|| CharacterParseError::MissingSkillField {
-        skill: diagnostic_name(skill),
+        skill: label.to_owned(),
         field,
     })?;
     let number = value
@@ -338,10 +346,10 @@ where
 
 /// The warning for one record, if any. Unknown skills are not checked against
 /// the experience table because it may not apply to them.
-fn warning_for(record: &SkillRecord) -> Option<Warning> {
+fn warning_for((index, record): (usize, &SkillRecord)) -> Option<Warning> {
     if !record.skill.is_known() {
         return Some(Warning::UnknownSkill {
-            name: record.skill.name().to_owned(),
+            position: index + 1,
         });
     }
     let implied_level = level_for_experience(record.experience);
@@ -562,12 +570,7 @@ mod tests {
         let export = parse(&text).expect("unknown skills do not fail the import");
         let name = Skill::Unknown("Necromancy".to_owned());
         assert_eq!(export.skill(&name).map(|s| s.real_level), Some(50));
-        assert_eq!(
-            export.warnings(),
-            [Warning::UnknownSkill {
-                name: "Necromancy".to_owned()
-            }]
-        );
+        assert_eq!(export.warnings(), [Warning::UnknownSkill { position: 1 }]);
     }
 
     #[test]
@@ -593,7 +596,7 @@ mod tests {
         assert_eq!(
             parse(&document("2026-01-01T00:00Z", &body)).unwrap_err(),
             CharacterParseError::DuplicateSkill {
-                name: "Attack".to_owned()
+                skill: "Attack".to_owned()
             }
         );
     }
@@ -609,8 +612,6 @@ mod tests {
             r#""text""#,
             r#"{"exported_at":"2026-01-01T00:00Z","stats":[]}"#,
             r#"{"exported_at":"2026-01-01T00:00Z","stats":null}"#,
-            r#"{"exported_at":"2026-01-01T00:00Z","stats":{"Attack":[1,0]}}"#,
-            r#"{"exported_at":"2026-01-01T00:00Z","stats":{"Attack":5}}"#,
         ] {
             assert_eq!(
                 parse(text).unwrap_err(),
@@ -687,16 +688,46 @@ mod tests {
     }
 
     #[test]
-    fn skill_names_in_errors_are_bounded() {
-        let long = "x".repeat(1_000_000);
-        let missing = parse(&document("2026-01-01T00:00Z", &format!(r#""{long}":{{}}"#)));
-        let repeated = format!(
-            r#""{long}":{{"real_level":1,"experience":0}},"{long}":{{"real_level":1,"experience":0}}"#
-        );
-        let duplicate = parse(&document("2026-01-01T00:00Z", &repeated));
-        for error in [missing.unwrap_err(), duplicate.unwrap_err()] {
-            assert!(error.to_string().len() < 200, "{}", error.to_string().len());
-            assert!(format!("{error:?}").len() < 200);
+    fn a_skill_that_is_not_an_object_is_named_in_the_error() {
+        for value in ["[1,0]", "5", "null", r#""x""#] {
+            let text = document("2026-01-01T00:00Z", &format!(r#""Attack":{value}"#));
+            assert_eq!(
+                parse(&text).unwrap_err(),
+                CharacterParseError::SkillNotAnObject {
+                    skill: "Attack".to_owned()
+                },
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_skill_is_identified_by_position_never_by_its_name() {
+        let hostile = "x".repeat(1_000_000);
+        let first = attack("1", "0");
+        let valid = r#"{"real_level":1,"experience":0}"#;
+        // Each body breaks the entry at the given 1-based position: a missing
+        // value, a wrong value, a non-object, and a repeat (reported at the
+        // second occurrence).
+        let cases = [
+            (format!(r#"{first},"{hostile}":{{"experience":0}}"#), 2),
+            (
+                format!(r#"{first},"{hostile}":{{"real_level":0,"experience":0}}"#),
+                2,
+            ),
+            (format!(r#"{first},"{hostile}":5"#), 2),
+            (
+                format!(r#"{first},"{hostile}":{valid},"{hostile}":{valid}"#),
+                3,
+            ),
+        ];
+        for (body, position) in cases {
+            let error = parse(&document("2026-01-01T00:00Z", &body)).unwrap_err();
+            for text in [error.to_string(), format!("{error:?}")] {
+                let expected = format!("unrecognised skill at position {position}");
+                assert!(text.contains(&expected), "{text}");
+                assert!(!text.contains("xxxx"));
+            }
         }
     }
 
