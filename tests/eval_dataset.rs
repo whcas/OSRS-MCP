@@ -31,9 +31,18 @@ struct Dataset {
     version: String,
     created: String,
     source: Source,
+    modes: std::collections::BTreeMap<String, String>,
     grades: std::collections::BTreeMap<String, String>,
     pages: Vec<Page>,
     queries: Vec<Query>,
+    retired_query_ids: Vec<Retired>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Retired {
+    id: String,
+    reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,22 +81,40 @@ enum RevisionBasis {
 struct Query {
     id: String,
     category: String,
+    mode: String,
     #[serde(rename = "query")]
     text: String,
     intent: String,
-    status: Status,
+    references: References,
+    relevance: Relevance,
     tags: Vec<String>,
     judgements: Vec<Judgement>,
     notes: Option<String>,
 }
 
+/// Whether the judged pages and sections were observed to exist.
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
-enum Status {
+enum References {
     Verified,
     Partial,
+    Unverified,
+}
+
+/// How far the relevance grades have been checked.
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum Relevance {
+    Provisional,
+    Reviewed,
     Ambiguous,
     Unresolved,
+}
+
+impl Relevance {
+    fn is_scorable(self) -> bool {
+        matches!(self, Self::Provisional | Self::Reviewed)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,23 +246,50 @@ fn judgements_reference_recorded_pages_and_observed_sections() {
     }
 }
 
+/// True if `outer` names the same section as `inner` or one of its ancestors.
+fn covers(outer: Option<&str>, inner: Option<&str>) -> bool {
+    match (outer, inner) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(outer), Some(inner)) => inner == outer || inner.starts_with(&format!("{outer} > ")),
+    }
+}
+
 #[test]
-fn scorable_queries_have_an_essential_judgement_and_no_duplicates() {
+fn judgements_never_overlap_so_one_result_cannot_count_twice() {
     let dataset = load();
 
     for query in &dataset.queries {
-        let mut seen = HashSet::new();
-        for judgement in &query.judgements {
-            assert!(
-                seen.insert((judgement.page.as_str(), judgement.section.as_deref())),
-                "{} judges the same target twice",
-                query.id
-            );
+        for (i, a) in query.judgements.iter().enumerate() {
+            for b in &query.judgements[i + 1..] {
+                let overlap = a.page == b.page
+                    && (covers(a.section.as_deref(), b.section.as_deref())
+                        || covers(b.section.as_deref(), a.section.as_deref()));
+                assert!(
+                    !overlap,
+                    "{} has overlapping judgements on {} ({:?} and {:?})",
+                    query.id, a.page, a.section, b.section
+                );
+            }
         }
-        if matches!(query.status, Status::Verified | Status::Partial) {
+    }
+}
+
+#[test]
+fn scorable_queries_have_an_essential_judgement_and_checked_references() {
+    let dataset = load();
+
+    for query in &dataset.queries {
+        if query.relevance.is_scorable() {
             assert!(
                 query.judgements.iter().any(|j| j.grade == 2),
                 "{} is scorable but has no essential judgement",
+                query.id
+            );
+            assert_ne!(
+                query.references,
+                References::Unverified,
+                "{} is scorable but its references are unverified",
                 query.id
             );
         }
@@ -243,29 +297,80 @@ fn scorable_queries_have_an_essential_judgement_and_no_duplicates() {
 }
 
 #[test]
-fn unresolved_and_ambiguous_queries_explain_themselves() {
+fn queries_needing_explanation_have_notes() {
     let dataset = load();
 
     for query in &dataset.queries {
-        let needs_notes = matches!(
-            query.status,
-            Status::Ambiguous | Status::Unresolved | Status::Partial
-        );
+        let plain = query.references == References::Verified && query.relevance.is_scorable();
         let has_notes = query.notes.as_deref().is_some_and(|n| !n.trim().is_empty());
         assert!(
-            !needs_notes || has_notes,
-            "{} needs notes for status {:?}",
+            plain || has_notes,
+            "{} needs notes ({:?}, {:?})",
             query.id,
-            query.status
+            query.references,
+            query.relevance
         );
     }
     assert!(
         dataset
             .queries
             .iter()
-            .any(|q| q.status == Status::Unresolved),
+            .any(|q| q.relevance == Relevance::Unresolved),
         "dataset should record at least one unresolved example"
     );
+}
+
+#[test]
+fn modes_are_declared_and_hardcore_worlds_is_the_focus() {
+    let dataset = load();
+
+    for query in &dataset.queries {
+        assert!(
+            dataset.modes.contains_key(&query.mode),
+            "{} has undeclared mode {}",
+            query.id,
+            query.mode
+        );
+        if query.mode == "hardcore_ironman" {
+            assert!(
+                query.tags.iter().any(|t| t == "disambiguation"),
+                "{} concerns Hardcore Ironman and must be tagged as disambiguation",
+                query.id
+            );
+        }
+    }
+    let worlds = dataset
+        .queries
+        .iter()
+        .filter(|q| q.mode == "hardcore_worlds")
+        .count();
+    let ironman = dataset
+        .queries
+        .iter()
+        .filter(|q| q.mode == "hardcore_ironman")
+        .count();
+    assert!(
+        worlds >= 4,
+        "expected several Hardcore Worlds queries, found {worlds}"
+    );
+    assert!(
+        worlds > ironman,
+        "Hardcore Ironman must stay a minority of mode queries"
+    );
+}
+
+#[test]
+fn retired_ids_are_explained_and_never_reused() {
+    let dataset = load();
+
+    for retired in &dataset.retired_query_ids {
+        assert_filled(&format!("{} reason", retired.id), &retired.reason);
+        assert!(
+            dataset.queries.iter().all(|q| q.id != retired.id),
+            "{} is retired but still present",
+            retired.id
+        );
+    }
 }
 
 #[test]
@@ -299,13 +404,18 @@ fn pages_are_unique_and_revisions_are_consistent() {
         let unique: HashSet<_> = page.observed_sections.iter().collect();
         assert_eq!(unique.len(), page.observed_sections.len(), "{}", page.title);
     }
-    for query in &dataset.queries {
-        for judgement in &query.judgements {
-            let recorded = page(&dataset, &judgement.page);
-            assert!(recorded.is_some(), "{} page {}", query.id, judgement.page);
-        }
-    }
     assert!(dataset.pages.iter().any(|p| !p.headings_complete));
+    for page in &dataset.pages {
+        assert!(
+            dataset
+                .queries
+                .iter()
+                .flat_map(|q| &q.judgements)
+                .any(|j| j.page == page.title),
+            "page {} is recorded but never judged",
+            page.title
+        );
+    }
 }
 
 #[test]
@@ -313,6 +423,7 @@ fn every_text_field_is_short_enough_to_exclude_wiki_excerpts() {
     let dataset = load();
     let mut fields: Vec<&str> = vec![&dataset.source.method, &dataset.source.licence_note];
     fields.extend(dataset.grades.values().map(String::as_str));
+    fields.extend(dataset.modes.values().map(String::as_str));
     for page in &dataset.pages {
         fields.push(&page.title);
         fields.extend(page.requested_as.iter().map(String::as_str));
@@ -322,6 +433,7 @@ fn every_text_field_is_short_enough_to_exclude_wiki_excerpts() {
     for query in &dataset.queries {
         fields.push(&query.text);
         fields.push(&query.intent);
+        fields.push(&query.mode);
         fields.extend(query.tags.iter().map(String::as_str));
         fields.extend(query.notes.as_deref());
     }

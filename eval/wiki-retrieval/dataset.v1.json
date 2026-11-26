@@ -6,8 +6,13 @@
   "source": {
     "site": "https://oldschool.runescape.wiki",
     "observed_on": "2026-11-26",
-    "method": "Page existence, redirects and headings read through a model-assisted fetch tool; relevance grades are author judgements from page and section titles, not from reading section text.",
+    "method": "Page existence, redirects and headings read through a model-assisted fetch tool; relevance grades are provisional author judgements from page and section titles; no section text has been read or reviewed.",
     "licence_note": "Contains only page titles, section heading names and revision identifiers from the OSRS Wiki, plus original queries. No Wiki prose is included."
+  },
+  "modes": {
+    "hardcore_worlds": "Hardcore Worlds, the fresh-economy one-life mode this project targets.",
+    "hardcore_ironman": "Hardcore Ironman account mode. Included only as explicit contrast or disambiguation.",
+    "mode_independent": "General game knowledge that applies in any mode."
   },
   "grades": {
     "2": "Essential: the section directly answers the query.",
@@ -15,25 +20,29 @@
   },
   "pages": [
     {
-      "title": "Abyssal whip",
-      "requested_as": [],
-      "oldid": 15326130,
-      "last_modified": "2026-08-31",
+      "title": "Hardcore Worlds",
+      "requested_as": [
+        "Hardcore main"
+      ],
+      "oldid": 15415136,
+      "last_modified": "2026-11-25",
       "revision_basis": "summary",
       "headings_complete": true,
       "observed_sections": [
-        "Combat stats",
-        "Special attack",
-        "Upgrading",
-        "Products",
-        "Treasure Trails",
-        "Item sources",
-        "Sound effects",
-        "Used in recommended equipment",
+        "Getting started",
+        "Broadcasts",
+        "Broadcasts > World Firsts",
+        "Death",
+        "Death > Reset",
+        "Death > Transfer",
+        "Death > Dangerous activities",
+        "List of worlds",
         "Changes",
         "Trivia",
-        "References"
-      ]
+        "See also",
+        "See also > Newsposts"
+      ],
+      "note": "Contents block read verbatim; the page body was only partly read. Revision data came from a fetch-tool summary that was inconsistent with the verbatim text, so treat it as unverified. No heading is devoted to the economy."
     },
     {
       "title": "Fairy ring",
@@ -212,19 +221,6 @@
       ]
     },
     {
-      "title": "Maximum melee hit",
-      "requested_as": [],
-      "oldid": 15382973,
-      "last_modified": "2026-10-26",
-      "revision_basis": "summary",
-      "headings_complete": true,
-      "observed_sections": [
-        "Calculating your maximum melee hit",
-        "Trivia",
-        "References"
-      ]
-    },
-    {
       "title": "Special attacks",
       "requested_as": [],
       "oldid": null,
@@ -323,23 +319,6 @@
       ]
     },
     {
-      "title": "Waterfall Quest",
-      "requested_as": [],
-      "oldid": 15357907,
-      "last_modified": "2026-09-28",
-      "revision_basis": "summary",
-      "headings_complete": false,
-      "observed_sections": [
-        "Details",
-        "Walkthrough",
-        "Rewards",
-        "Required for completing",
-        "Transcript",
-        "Changes",
-        "Trivia"
-      ]
-    },
-    {
       "title": "Pay-to-play Prayer training",
       "requested_as": [
         "Prayer training"
@@ -356,26 +335,6 @@
         "Quests for Prayer experience"
       ],
       "note": "The fetch-tool summary also listed headings that did not appear in the table of contents; they are omitted."
-    },
-    {
-      "title": "Pay-to-play Mining training",
-      "requested_as": [
-        "Mining training"
-      ],
-      "oldid": null,
-      "last_modified": null,
-      "revision_basis": "not_observed",
-      "headings_complete": true,
-      "observed_sections": [
-        "Choosing a method",
-        "Equipment",
-        "Fastest experience",
-        "Other methods",
-        "Post 99",
-        "Ore table",
-        "Quests for Mining experience",
-        "References"
-      ]
     },
     {
       "title": "Agility training",
@@ -511,26 +470,13 @@
   ],
   "queries": [
     {
-      "id": "q001",
-      "category": "exact_name",
-      "query": "abyssal whip",
-      "intent": "Bare item name; the page for the item is the answer.",
-      "status": "verified",
-      "tags": [],
-      "judgements": [
-        {
-          "page": "Abyssal whip",
-          "section": null,
-          "grade": 2
-        }
-      ]
-    },
-    {
       "id": "q002",
       "category": "exact_name",
+      "mode": "mode_independent",
       "query": "fairy rings",
       "intent": "Plural form that must resolve through a redirect to the singular page title.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [
         "redirect"
       ],
@@ -545,10 +491,13 @@
     {
       "id": "q003",
       "category": "exact_name",
+      "mode": "hardcore_ironman",
       "query": "hardcore ironman",
-      "intent": "Account-mode name that resolves through a redirect to a section of a broader page.",
-      "status": "verified",
+      "intent": "Contrast only: Hardcore Ironman is a different mode from Hardcore Worlds. Tests redirect-to-section resolution and mode disambiguation.",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [
+        "disambiguation",
         "redirect",
         "section_target"
       ],
@@ -561,11 +510,30 @@
       ]
     },
     {
+      "id": "q026",
+      "category": "exact_name",
+      "mode": "hardcore_worlds",
+      "query": "hardcore worlds",
+      "intent": "Bare name of the mode this project targets; the page for the mode is the answer.",
+      "references": "verified",
+      "relevance": "provisional",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Hardcore Worlds",
+          "section": null,
+          "grade": 2
+        }
+      ]
+    },
+    {
       "id": "q004",
       "category": "multi_entity",
+      "mode": "mode_independent",
       "query": "rune crossbow versus armadyl crossbow",
       "intent": "Compare two named items; each item's comparison section is needed.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [],
       "judgements": [
         {
@@ -593,9 +561,11 @@
     {
       "id": "q005",
       "category": "multi_entity",
+      "mode": "mode_independent",
       "query": "how do the two protection prayers against missiles and magic interact",
       "intent": "Needs the rule about conflicting prayers plus the two prayer pages.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [],
       "judgements": [
         {
@@ -618,9 +588,11 @@
     {
       "id": "q006",
       "category": "multi_entity",
+      "mode": "mode_independent",
       "query": "venom versus poison, which is worse and how do I cure each",
       "intent": "Two related status effects; both curing sections are needed.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [],
       "judgements": [
         {
@@ -646,26 +618,39 @@
       ]
     },
     {
-      "id": "q007",
-      "category": "game_mechanic",
-      "query": "how do I calculate my max hit with melee",
-      "intent": "Formula page for a core combat mechanic.",
-      "status": "verified",
-      "tags": [],
+      "id": "q030",
+      "category": "multi_entity",
+      "mode": "hardcore_worlds",
+      "query": "hardcore worlds versus hardcore ironman",
+      "intent": "Contrast query: the mode this project targets against the older account mode with a similar name. Both references must surface.",
+      "references": "partial",
+      "relevance": "provisional",
+      "tags": [
+        "disambiguation",
+        "cross_page"
+      ],
       "judgements": [
         {
-          "page": "Maximum melee hit",
-          "section": "Calculating your maximum melee hit",
+          "page": "Hardcore Worlds",
+          "section": null,
+          "grade": 2
+        },
+        {
+          "page": "Ironman Mode",
+          "section": "Restrictions > Hardcore Ironman",
           "grade": 2
         }
-      ]
+      ],
+      "notes": "Whether either page states the difference was not read; a dedicated comparison section was not found on the Hardcore Worlds page."
     },
     {
       "id": "q008",
       "category": "game_mechanic",
+      "mode": "mode_independent",
       "query": "how does special attack energy come back",
       "intent": "Mechanic spread across a general page; energy section is the target.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [],
       "judgements": [
         {
@@ -683,9 +668,11 @@
     {
       "id": "q009",
       "category": "game_mechanic",
+      "mode": "mode_independent",
       "query": "how far away do monsters notice me and attack",
       "intent": "Natural-language phrasing for aggression ranges; the page title differs from the query words.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [
         "lexical_gap"
       ],
@@ -710,9 +697,11 @@
     {
       "id": "q010",
       "category": "game_mechanic",
+      "mode": "mode_independent",
       "query": "what is prayer flicking",
       "intent": "Concept that appears on the general prayer page and on individual prayer pages.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [],
       "judgements": [
         {
@@ -740,9 +729,11 @@
     {
       "id": "q011",
       "category": "game_mechanic",
+      "mode": "mode_independent",
       "query": "how many of one item can I buy at the grand exchange in a window",
       "intent": "Market limit mechanic; relevant to trading advice.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [],
       "judgements": [
         {
@@ -755,9 +746,11 @@
     {
       "id": "q012",
       "category": "quest",
+      "mode": "mode_independent",
       "query": "what should I prepare before fighting Elvarg",
       "intent": "Quest preparation, with the boss name rather than the quest name in the query.",
-      "status": "partial",
+      "references": "partial",
+      "relevance": "provisional",
       "tags": [
         "lexical_gap"
       ],
@@ -778,9 +771,11 @@
     {
       "id": "q013",
       "category": "quest",
+      "mode": "mode_independent",
       "query": "how do I unlock fairy rings",
       "intent": "Unlock condition lives on a quest page, not the fairy ring page.",
-      "status": "partial",
+      "references": "partial",
+      "relevance": "provisional",
       "tags": [
         "cross_page"
       ],
@@ -799,27 +794,13 @@
       "notes": "Whether the fairy ring page itself states the unlock condition was not checked."
     },
     {
-      "id": "q014",
-      "category": "quest",
-      "query": "what rewards does Waterfall Quest give",
-      "intent": "Quest rewards section.",
-      "status": "partial",
-      "tags": [],
-      "judgements": [
-        {
-          "page": "Waterfall Quest",
-          "section": "Rewards",
-          "grade": 2
-        }
-      ],
-      "notes": "Page headings were read partly from a fetch-tool summary."
-    },
-    {
       "id": "q015",
       "category": "skilling",
+      "mode": "mode_independent",
       "query": "fastest way to train prayer",
       "intent": "Training guide; fastest-method sections are the target.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [
         "redirect"
       ],
@@ -842,38 +823,13 @@
       ]
     },
     {
-      "id": "q016",
-      "category": "skilling",
-      "query": "mining training plan from level 1 to 99",
-      "intent": "Level-range training guide.",
-      "status": "verified",
-      "tags": [
-        "redirect"
-      ],
-      "judgements": [
-        {
-          "page": "Pay-to-play Mining training",
-          "section": "Fastest experience",
-          "grade": 2
-        },
-        {
-          "page": "Pay-to-play Mining training",
-          "section": "Other methods",
-          "grade": 1
-        },
-        {
-          "page": "Pay-to-play Mining training",
-          "section": "Equipment",
-          "grade": 1
-        }
-      ]
-    },
-    {
       "id": "q017",
       "category": "skilling",
+      "mode": "mode_independent",
       "query": "agility training around level 50",
       "intent": "Level-specific sections; more than one method is acceptable.",
-      "status": "partial",
+      "references": "partial",
+      "relevance": "provisional",
       "tags": [
         "numeric_range"
       ],
@@ -894,10 +850,14 @@
     {
       "id": "q018",
       "category": "hardcore_safety",
+      "mode": "hardcore_ironman",
       "query": "what happens to my account when I die as a hardcore ironman",
-      "intent": "Core Hardcore rule.",
-      "status": "verified",
-      "tags": [],
+      "intent": "Contrast only: death rules for Hardcore Ironman, not for Hardcore Worlds (see q027).",
+      "references": "verified",
+      "relevance": "provisional",
+      "tags": [
+        "disambiguation"
+      ],
       "judgements": [
         {
           "page": "Ironman Mode",
@@ -914,9 +874,11 @@
     {
       "id": "q019",
       "category": "hardcore_safety",
+      "mode": "mode_independent",
       "query": "does venom keep getting stronger and can it kill me",
       "intent": "Survival-relevant mechanic phrased as a worry.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [],
       "judgements": [
         {
@@ -934,9 +896,11 @@
     {
       "id": "q020",
       "category": "hardcore_safety",
+      "mode": "mode_independent",
       "query": "what do I lose if I die while skulled in the wilderness",
       "intent": "Two pages describe the relevant mechanics.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [
         "cross_page"
       ],
@@ -961,9 +925,11 @@
     {
       "id": "q021",
       "category": "hardcore_safety",
+      "mode": "mode_independent",
       "query": "how do I stay out of reach of a monster that only attacks in melee",
       "intent": "Describes the technique without its usual name.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [
         "lexical_gap",
         "redirect"
@@ -973,20 +939,17 @@
           "page": "Safespot",
           "section": null,
           "grade": 2
-        },
-        {
-          "page": "Safespot",
-          "section": "Notable safespots",
-          "grade": 1
         }
       ]
     },
     {
       "id": "q022",
       "category": "hardcore_safety",
+      "mode": "mode_independent",
       "query": "which foods heal the most for fast eating in fights",
       "intent": "Food choice for survival.",
-      "status": "verified",
+      "references": "verified",
+      "relevance": "provisional",
       "tags": [],
       "judgements": [
         {
@@ -1002,11 +965,54 @@
       ]
     },
     {
+      "id": "q027",
+      "category": "hardcore_safety",
+      "mode": "hardcore_worlds",
+      "query": "what happens to my character when I die on a hardcore world",
+      "intent": "Core rule of the mode this project targets.",
+      "references": "verified",
+      "relevance": "provisional",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Hardcore Worlds",
+          "section": "Death > Reset",
+          "grade": 2
+        },
+        {
+          "page": "Hardcore Worlds",
+          "section": "Death > Transfer",
+          "grade": 1
+        }
+      ],
+      "notes": "Grades come from section titles only; the section text was not read."
+    },
+    {
+      "id": "q028",
+      "category": "hardcore_safety",
+      "mode": "hardcore_worlds",
+      "query": "which activities are too risky to do on a hardcore world",
+      "intent": "Safety constraint list for the mode this project targets.",
+      "references": "verified",
+      "relevance": "provisional",
+      "tags": [],
+      "judgements": [
+        {
+          "page": "Hardcore Worlds",
+          "section": "Death > Dangerous activities",
+          "grade": 2
+        }
+      ],
+      "notes": "Grades come from the section title only; the section text was not read."
+    },
+    {
       "id": "q023",
       "category": "money_making",
+      "mode": "mode_independent",
       "query": "ways to make money early on without fighting",
       "intent": "Exploratory; answer is spread over many method subpages that were not checked.",
-      "status": "ambiguous",
+      "references": "verified",
+      "relevance": "ambiguous",
       "tags": [
         "exploratory"
       ],
@@ -1022,9 +1028,11 @@
     {
       "id": "q024",
       "category": "money_making",
+      "mode": "mode_independent",
       "query": "ideas for daily or passive income",
       "intent": "Exploratory; recurring methods section is the best landing point.",
-      "status": "partial",
+      "references": "partial",
+      "relevance": "provisional",
       "tags": [
         "exploratory"
       ],
@@ -1045,15 +1053,35 @@
     {
       "id": "q025",
       "category": "money_making",
+      "mode": "hardcore_worlds",
       "query": "does the hardcore economy differ from the normal one",
-      "intent": "Project-specific question; no article was identified for it.",
-      "status": "unresolved",
+      "intent": "Project-specific question about the Hardcore Worlds economy; no reference section was identified.",
+      "references": "unverified",
+      "relevance": "unresolved",
       "tags": [
         "exploratory",
         "hardcore_economy"
       ],
       "judgements": [],
-      "notes": "No relevant page or section was identified, and the existence of a dedicated page is unverified. Do not score until a reference is found."
+      "notes": "The Hardcore Worlds page has no heading devoted to the economy (observed 2026-11-26); its lead text and change history may touch on it but that was not verified. Do not score until a reference is found."
+    }
+  ],
+  "retired_query_ids": [
+    {
+      "id": "q001",
+      "reason": "Trivial bare item name; replaced by the Hardcore Worlds exact-name query (q026)."
+    },
+    {
+      "id": "q007",
+      "reason": "Redundant game-mechanic formula query; budget used for mode-specific queries."
+    },
+    {
+      "id": "q014",
+      "reason": "Low-value quest reward lookup with partly summarised headings; budget used for mode-specific queries."
+    },
+    {
+      "id": "q016",
+      "reason": "Near-duplicate of the Prayer training query; budget used for mode-specific queries."
     }
   ]
 }
