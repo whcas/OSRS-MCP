@@ -425,6 +425,35 @@ fn uninstall_removes_only_this_repositorys_hooks_path() {
 }
 
 #[test]
+fn equivalent_spellings_of_the_hooks_directory_count_as_installed() {
+    for spelling in [".githooks/", "./.githooks", "././.githooks//"] {
+        let repo = Fixture::new(0);
+        repo.git_ok(&repo.work, &["config", "core.hooksPath", spelling]);
+
+        let output = repo.run_installer(&[]);
+
+        assert!(output.status.success(), "{spelling}: {}", stderr(&output));
+        assert!(
+            stdout(&output).contains("already installed"),
+            "{spelling}: {}",
+            stdout(&output)
+        );
+        assert_eq!(repo.local_hooks_path().as_deref(), Some(spelling));
+    }
+}
+
+#[test]
+fn uninstall_removes_equivalent_spellings_of_the_hooks_directory() {
+    let repo = Fixture::new(0);
+    repo.git_ok(&repo.work, &["config", "core.hooksPath", "./.githooks/"]);
+
+    let output = repo.run_installer(&["uninstall"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(repo.local_hooks_path(), None);
+}
+
+#[test]
 fn uninstall_leaves_a_custom_hooks_path_alone() {
     let repo = Fixture::new(0);
     repo.git_ok(&repo.work, &["config", "core.hooksPath", "my-hooks"]);

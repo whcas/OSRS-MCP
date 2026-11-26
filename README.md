@@ -66,7 +66,7 @@ scripts/install-hooks.sh            # install
 scripts/install-hooks.sh uninstall  # remove
 ```
 
-Installing sets `core.hooksPath=.githooks` in this repository's local Git config only; global and system config are never touched, and running it again is harmless. If `core.hooksPath` is already set to something else (in any config scope), the script refuses and explains; pass `--replace` to override it in this repository. Hooks already in `.git/hooks` stop running while `.githooks` is active, and the installer lists any it finds.
+Installing sets `core.hooksPath=.githooks` in this repository's local Git config only; global and system config are never touched, and running it again is harmless. `.githooks/` and `./.githooks` count as the same directory; an absolute path to it does not. If `core.hooksPath` is already set to something else (in any config scope), the script refuses and explains; pass `--replace` to override it in this repository. Hooks already in `.git/hooks` stop running while `.githooks` is active, and the installer lists any it finds.
 
 Prerequisites: a POSIX shell, Git and the pinned Rust toolchain (see "Toolchain policy"). Unix-like systems only; on Windows use WSL or Git Bash.
 
@@ -78,6 +78,7 @@ Prerequisites: a POSIX shell, Git and the pinned Rust toolchain (see "Toolchain 
 Hooks check your working tree, not a snapshot of what will be committed or pushed:
 
 - The whitespace check in `pre-commit` reads the staged changes only. The formatting check reads working-tree files, so with partial staging (`git add -p`) it can pass or fail on content that is not in the commit.
+- `pre-push` always runs the full `scripts/check.sh` (build, Clippy and all tests), even for a docs-only push, so the first run after a change can take minutes; `--no-verify` skips it. Pushing a tag also runs the checks and prints the "not the checked-out commit" warning.
 - `pre-push` tests the working tree. If it has uncommitted changes, untracked files, or the pushed ref is not the checked-out commit, the hook prints a warning because the result may not describe what is pushed.
 - Neither hook replaces CI, which checks the pushed commits and remains authoritative, as do branch protections.
 

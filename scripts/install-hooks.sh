@@ -30,8 +30,14 @@ done
 root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root" || exit 1
 
-local_path=$(git config --local --get core.hooksPath)
-effective_path=$(git config --get core.hooksPath)
+# Treat `.githooks/` and `./.githooks` as the same relative directory.
+# (An absolute path to it is not recognised and counts as a custom setting.)
+normalise() {
+    printf '%s\n' "$1" | sed -e 's|^\(\./\)*||' -e 's|/*$||'
+}
+
+local_path=$(normalise "$(git config --local --get core.hooksPath)")
+effective_path=$(normalise "$(git config --get core.hooksPath)")
 
 install_hooks() {
     if [ "$effective_path" = "$hooks_dir" ]; then
