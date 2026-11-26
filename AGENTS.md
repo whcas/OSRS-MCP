@@ -40,6 +40,8 @@
 
 - Run `scripts/check.sh` before opening or updating a PR; it runs formatting, Clippy with warnings denied, build and tests using locked dependencies. Run `scripts/check.sh audit` when applicable; report any checks that could not be run.
 - Tests should be deterministic, isolated and verify observable behaviour. Unit tests must not depend on live services; use small sanitised fixtures for external data.
+- Follow [Rust test organisation](https://doc.rust-lang.org/book/ch11-03-test-organization.html): keep unit tests in the same source file as the implementation, inside `#[cfg(test)] mod tests`. Testing a public function alone does not make a test an integration test.
+- Reserve the top-level `tests/` directory for integration tests of public interfaces across components or external boundaries, repository-level checks and opt-in real-service or local-data verification. External verification must be explicitly opt-in and excluded from default checks and CI.
 - Add regression tests for corrected defects. Test error paths and boundary cases as appropriate.
 - Never weaken tests, suppress diagnostics or claim checks passed merely to get a green build. Explain any checks that cannot be run.
 - For retrieval or LLM-facing changes, add reproducible examples or evaluations as appropriate; distinguish measured results from assumptions.
