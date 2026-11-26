@@ -114,7 +114,7 @@ Aligned with the maintainer's clarifications on #15 and #19.
 - `exported_at`: an ISO-8601 offset date-time, kept as original text alongside the parsed instant.
 
 **Optional or ignored**
-- `boosted_level` is parsed if present but not used for advice.
+- `boosted_level` is ignored: it is never read, validated or retained, so advice cannot depend on it.
 - `plugin_version` is recorded as text; any value is accepted.
 - `account_name`, `world`, `game_state`, `world_types` and `reason` are not required. `account_name` is a personal identifier and is **not retained**.
 - `session_id` is **not retained**.
