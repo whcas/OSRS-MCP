@@ -44,3 +44,23 @@ fn no_arguments_fails_with_usage_on_stderr_only() {
     let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
     assert!(stderr.contains("Usage:"), "stderr: {stderr}");
 }
+
+#[cfg(unix)]
+#[test]
+fn non_unicode_argument_fails_with_usage_instead_of_panicking() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_osrs-mcp"))
+        .arg(OsStr::from_bytes(b"--\xff"))
+        .output()
+        .expect("binary should start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout must stay clean for protocol output"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    assert!(stderr.contains("Usage:"), "stderr: {stderr}");
+}

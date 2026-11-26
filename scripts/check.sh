@@ -3,9 +3,11 @@
 #
 # Usage: scripts/check.sh [fmt|clippy|test|audit|all]
 #
-# `all` (the default) runs fmt, clippy and test. `audit` needs cargo-deny
-# (`cargo install --locked cargo-deny`) and network access to fetch the
-# RustSec advisory database, so it is run separately.
+# `all` (the default) runs fmt, clippy and test. `audit` is run separately: it
+# needs network access to fetch the RustSec advisory database, and cargo-deny
+# at the version CI uses:
+#
+#   cargo install --locked --version 0.20.2 cargo-deny
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -30,7 +32,7 @@ check_test() {
 
 check_audit() {
     if ! command -v cargo-deny >/dev/null 2>&1; then
-        echo "cargo-deny is not installed; run: cargo install --locked cargo-deny" >&2
+        echo "cargo-deny is not installed; run: cargo install --locked --version 0.20.2 cargo-deny" >&2
         exit 1
     fi
     run cargo deny --locked check advisories bans sources

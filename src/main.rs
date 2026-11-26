@@ -3,6 +3,7 @@
 //! Stdout is reserved for program output (and, later, MCP protocol traffic);
 //! usage and diagnostics go to stderr.
 
+use std::ffi::OsString;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
@@ -11,7 +12,8 @@ const USAGE_ERROR: u8 = 2;
 
 fn main() -> ExitCode {
     let info = osrs_mcp::build_info();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `args_os` rather than `args`: the latter panics on non-Unicode input.
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     match args.as_slice() {
         [flag] if flag == "--version" || flag == "-V" => {

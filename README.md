@@ -48,10 +48,10 @@ scripts/check.sh
 
 This runs, in order, `cargo fmt --all --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo build --locked --all-targets` and `cargo test --locked`. Each step can also run alone with `scripts/check.sh fmt`, `clippy` or `test`. CI calls the same script, so local and CI commands cannot drift apart.
 
-The dependency audit runs separately because it needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) and network access to the RustSec advisory database:
+The dependency audit runs separately because it needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) and network access to the RustSec advisory database. Install the same version CI uses (set in `.github/workflows/ci.yml`):
 
 ```sh
-cargo install --locked cargo-deny
+cargo install --locked --version 0.20.2 cargo-deny
 scripts/check.sh audit
 ```
 
