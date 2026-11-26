@@ -47,6 +47,10 @@ pub enum MarketDataError {
         /// The limit in bytes.
         limit_bytes: usize,
     },
+    /// The system clock reads before the Unix epoch, so a retrieval time
+    /// cannot be recorded. Reported rather than stored as 0, which would look
+    /// like very stale data.
+    ClockBeforeEpoch,
 }
 
 impl fmt::Display for MarketDataError {
@@ -75,6 +79,7 @@ impl fmt::Display for MarketDataError {
                 "Hardcore {} response exceeded {limit_bytes} bytes",
                 endpoint.path()
             ),
+            Self::ClockBeforeEpoch => f.write_str("system clock is before the Unix epoch"),
         }
     }
 }

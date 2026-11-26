@@ -141,6 +141,7 @@ fn status(status: &'static str) -> Reply {
 fn client_for(mock: &Mock, adjust: impl FnOnce(&mut ClientConfig)) -> HardcoreClient {
     let mut config = ClientConfig {
         base_url: mock.base_url.clone(),
+        allow_loopback_test_server: true,
         clock: fixed_now,
         request_timeout: Duration::from_secs(5),
         ..ClientConfig::default()
@@ -415,6 +416,7 @@ fn the_standard_world_endpoint_cannot_be_used_to_build_a_hardcore_client() {
     ] {
         let config = ClientConfig {
             base_url: base_url.to_owned(),
+            allow_loopback_test_server: true,
             ..ClientConfig::default()
         };
         assert_eq!(
@@ -423,4 +425,30 @@ fn the_standard_world_endpoint_cannot_be_used_to_build_a_hardcore_client() {
             "{base_url}"
         );
     }
+}
+
+#[test]
+fn a_loopback_server_is_refused_by_default() {
+    let config = ClientConfig {
+        base_url: "http://127.0.0.1:8080/api/v2/osrs-hc/".to_owned(),
+        ..ClientConfig::default()
+    };
+    assert_eq!(
+        HardcoreClient::new(config).map(|_| ()),
+        Err(ConfigError::NotHardcoreEndpoint)
+    );
+}
+
+fn before_epoch() -> SystemTime {
+    UNIX_EPOCH - Duration::from_secs(1)
+}
+
+#[tokio::test]
+async fn a_clock_before_the_epoch_is_an_error_not_a_zero_retrieval_time() {
+    let mock = serve(vec![ok(r#"{"data":{}}"#)]).await;
+    let client = client_for(&mock, |config| config.clock = before_epoch);
+    assert_eq!(
+        client.latest(None).await.unwrap_err(),
+        MarketDataError::ClockBeforeEpoch
+    );
 }

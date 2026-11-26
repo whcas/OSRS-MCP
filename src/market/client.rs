@@ -30,14 +30,20 @@ const DEFAULT_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 ///
 /// The defaults target the real Hardcore endpoint with an identifying
 /// `User-Agent`. `base_url` is checked at construction: it must be
-/// [`HARDCORE_BASE_URL`], or an `http` loopback URL (for a local test server)
-/// whose path ends in `osrs-hc`. Any other origin, and the standard-world
-/// path, is rejected, so results cannot be labelled Hardcore while coming
-/// from somewhere else.
+/// [`HARDCORE_BASE_URL`]. The one exception is a local test server: with
+/// `allow_loopback_test_server` set (off by default), an `http` loopback URL
+/// whose path ends in `osrs-hc` is also accepted. Any other origin, and the
+/// standard-world path, is rejected. Results from a loopback server are still
+/// labelled Hardcore, because the label cannot know what a local process
+/// serves; [`Provenance::source_url`] shows where each result came from, and
+/// production code should never set the flag.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
     /// Base URL; see the type documentation for what is accepted.
     pub base_url: String,
+    /// Also accept an `http` loopback base URL for a local test server. Off by
+    /// default; intended for tests only.
+    pub allow_loopback_test_server: bool,
     /// Value of the `User-Agent` header. Must not be blank. The API operator
     /// asks for a descriptive value and blocks generic client names.
     pub user_agent: String,
@@ -55,6 +61,7 @@ impl Default for ClientConfig {
     fn default() -> Self {
         Self {
             base_url: HARDCORE_BASE_URL.to_owned(),
+            allow_loopback_test_server: false,
             user_agent: format!(
                 "{}/{} (+https://github.com/whcas/OSRS-MCP)",
                 env!("CARGO_PKG_NAME"),
@@ -73,8 +80,8 @@ impl Default for ClientConfig {
 pub enum ConfigError {
     /// The base URL did not parse.
     InvalidBaseUrl,
-    /// The base URL is not the Hardcore endpoint or a loopback test server
-    /// whose path ends in `osrs-hc`.
+    /// The base URL is not the Hardcore endpoint (or, when allowed, a loopback
+    /// test server whose path ends in `osrs-hc`).
     NotHardcoreEndpoint,
     /// The `User-Agent` was blank.
     BlankUserAgent,
@@ -136,7 +143,7 @@ impl HardcoreClient {
         if config.user_agent.trim().is_empty() {
             return Err(ConfigError::BlankUserAgent);
         }
-        let base_url = parse_base_url(&config.base_url)?;
+        let base_url = parse_base_url(&config.base_url, config.allow_loopback_test_server)?;
         let http = Client::builder()
             .user_agent(config.user_agent)
             .connect_timeout(config.connect_timeout)
@@ -160,7 +167,7 @@ impl HardcoreClient {
     /// Returns [`MarketDataError`] on transport, HTTP, size or parse failure.
     pub async fn mapping(&self) -> Result<Observed<Vec<ItemInfo>>, MarketDataError> {
         let (url, body) = self.get(Endpoint::Mapping, &[]).await?;
-        Ok(self.observed(Endpoint::Mapping, &url, parse::mapping(&body)?))
+        self.observed(Endpoint::Mapping, &url, parse::mapping(&body)?)
     }
 
     /// Latest observed trades (`/latest`), for one item or, with `None`, all
@@ -178,7 +185,7 @@ impl HardcoreClient {
             .into_iter()
             .collect();
         let (url, body) = self.get(Endpoint::Latest, &query).await?;
-        Ok(self.observed(Endpoint::Latest, &url, parse::latest(&body, item)?))
+        self.observed(Endpoint::Latest, &url, parse::latest(&body, item)?)
     }
 
     /// Averages and volumes for every item over one window (`/5m` or `/1h`).
@@ -198,7 +205,7 @@ impl HardcoreClient {
             .into_iter()
             .collect();
         let (url, body) = self.get(endpoint, &query).await?;
-        Ok(self.observed(endpoint, &url, parse::window(endpoint, &body)?))
+        self.observed(endpoint, &url, parse::window(endpoint, &body)?)
     }
 
     /// Price history for one item (`/timeseries`).
@@ -216,14 +223,22 @@ impl HardcoreClient {
             ("lookback", lookback.as_query().to_owned()),
         ];
         let (url, body) = self.get(Endpoint::Timeseries, &query).await?;
-        Ok(self.observed(Endpoint::Timeseries, &url, parse::timeseries(&body, item)?))
+        self.observed(Endpoint::Timeseries, &url, parse::timeseries(&body, item)?)
     }
 
-    fn observed<T>(&self, endpoint: Endpoint, url: &Url, value: T) -> Observed<T> {
+    fn observed<T>(
+        &self,
+        endpoint: Endpoint,
+        url: &Url,
+        value: T,
+    ) -> Result<Observed<T>, MarketDataError> {
+        // A clock before the epoch is an error, not a `retrieved_at` of 0 that
+        // would read as very stale data.
         let retrieved_at = (self.clock)()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs());
-        Observed {
+            .map_err(|_| MarketDataError::ClockBeforeEpoch)?
+            .as_secs();
+        Ok(Observed {
             value,
             provenance: Provenance {
                 world_type: WorldType::Hardcore,
@@ -231,7 +246,7 @@ impl HardcoreClient {
                 source_url: url.to_string(),
                 retrieved_at: UnixSeconds(retrieved_at),
             },
-        }
+        })
     }
 
     /// One bounded GET. Returns the requested URL and the body of a
@@ -296,7 +311,7 @@ impl HardcoreClient {
 
 /// Parses the base URL, guarantees a trailing slash on its path, and accepts
 /// only Hardcore origins (see [`ClientConfig`]).
-fn parse_base_url(text: &str) -> Result<Url, ConfigError> {
+fn parse_base_url(text: &str, allow_loopback: bool) -> Result<Url, ConfigError> {
     let mut url = Url::parse(text).map_err(|_| ConfigError::InvalidBaseUrl)?;
     if url.cannot_be_a_base() {
         return Err(ConfigError::InvalidBaseUrl);
@@ -305,14 +320,14 @@ fn parse_base_url(text: &str) -> Result<Url, ConfigError> {
         let path = format!("{}/", url.path());
         url.set_path(&path);
     }
-    if is_hardcore_origin(&url) {
+    if is_hardcore_origin(&url, allow_loopback) {
         Ok(url)
     } else {
         Err(ConfigError::NotHardcoreEndpoint)
     }
 }
 
-fn is_hardcore_origin(url: &Url) -> bool {
+fn is_hardcore_origin(url: &Url, allow_loopback: bool) -> bool {
     let plain = url.username().is_empty()
         && url.password().is_none()
         && url.query().is_none()
@@ -321,7 +336,8 @@ fn is_hardcore_origin(url: &Url) -> bool {
         && url.host_str() == Some("prices.runescape.wiki")
         && url.port().is_none()
         && url.path() == "/api/v2/osrs-hc/";
-    let loopback = url.scheme() == "http"
+    let loopback = allow_loopback
+        && url.scheme() == "http"
         && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
         && url.path().ends_with("/osrs-hc/");
     plain && (real || loopback)
@@ -343,7 +359,7 @@ mod tests {
 
     #[test]
     fn default_base_url_is_the_hardcore_endpoint_never_standard() {
-        let url = parse_base_url(&ClientConfig::default().base_url).unwrap();
+        let url = parse_base_url(&ClientConfig::default().base_url, false).unwrap();
         assert_eq!(url.path(), "/api/v2/osrs-hc/");
     }
 
@@ -358,6 +374,7 @@ mod tests {
     fn base_url_gets_a_trailing_slash_and_endpoint_urls_append_to_it() {
         let config = ClientConfig {
             base_url: "http://127.0.0.1:9/api/osrs-hc".to_owned(),
+            allow_loopback_test_server: true,
             ..ClientConfig::default()
         };
         let client = HardcoreClient::new(config).unwrap();
@@ -393,6 +410,21 @@ mod tests {
     }
 
     #[test]
+    fn loopback_is_refused_unless_explicitly_allowed() {
+        let url = "http://127.0.0.1:8080/api/v2/osrs-hc/";
+        assert_eq!(
+            parse_base_url(url, false).map(|_| ()),
+            Err(ConfigError::NotHardcoreEndpoint)
+        );
+        assert!(parse_base_url(url, true).is_ok());
+        // The flag never widens the real endpoint's checks.
+        assert_eq!(
+            parse_base_url("https://prices.runescape.wiki/api/v2/osrs/", true).map(|_| ()),
+            Err(ConfigError::NotHardcoreEndpoint)
+        );
+    }
+
+    #[test]
     fn only_hardcore_origins_can_be_labelled_hardcore() {
         let rejected = [
             // Standard-world path on the real host.
@@ -414,7 +446,7 @@ mod tests {
         ];
         for base_url in rejected {
             assert_eq!(
-                parse_base_url(base_url).map(|_| ()),
+                parse_base_url(base_url, true).map(|_| ()),
                 Err(ConfigError::NotHardcoreEndpoint),
                 "{base_url}"
             );
@@ -426,7 +458,7 @@ mod tests {
             "http://localhost:3000/osrs-hc",
             "http://[::1]:3000/osrs-hc/",
         ] {
-            assert!(parse_base_url(base_url).is_ok(), "{base_url}");
+            assert!(parse_base_url(base_url, true).is_ok(), "{base_url}");
         }
     }
 }

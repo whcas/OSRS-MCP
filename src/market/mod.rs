@@ -14,9 +14,10 @@
 //!
 //! - Results are always labelled [`WorldType::Hardcore`]. The client targets
 //!   the `osrs-hc` endpoint set and never falls back to standard-world data.
-//!   The configured base URL must be that endpoint (or a loopback test server
-//!   whose path ends in `osrs-hc`), and [`Provenance::source_url`] records the
-//!   exact URL each result came from.
+//!   The configured base URL must be that endpoint. A loopback test server is
+//!   accepted only when `allow_loopback_test_server` is set (off by default,
+//!   for tests); its results still carry the Hardcore label, so
+//!   [`Provenance::source_url`] records the exact URL each result came from.
 //! - Scoped responses are checked against the request: a `latest` or
 //!   `timeseries` answer for a different item, a zero timestep or a reversed
 //!   range is malformed. Averages are parsed from their exact text and
