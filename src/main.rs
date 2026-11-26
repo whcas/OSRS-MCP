@@ -1,7 +1,8 @@
 //! Command-line entry point.
 //!
-//! Stdout is reserved for program output (and, later, MCP protocol traffic);
-//! usage and diagnostics go to stderr.
+//! Stdout is reserved for program output and MCP protocol traffic; usage and
+//! diagnostics go to stderr. In particular `serve` must never write anything
+//! but protocol messages to stdout.
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -17,6 +18,8 @@ const USAGE_ERROR: u8 = 2;
 enum Command {
     /// Print the name and version to stdout.
     Version,
+    /// Serve MCP over stdin and stdout until the client disconnects.
+    Serve,
     /// Arguments were missing or not recognised.
     Usage,
 }
@@ -30,6 +33,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::FAILURE,
         },
+        Command::Serve => run_server(info),
         Command::Usage => {
             // Best effort: there is nowhere left to report a failure to write
             // to stderr, and the exit code still signals the usage error.
@@ -39,12 +43,58 @@ fn main() -> ExitCode {
     }
 }
 
+/// Renders an error followed by its chain of causes, for example
+/// `MCP initialization failed: connection closed`.
+fn describe(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        text.push_str(": ");
+        text.push_str(&next.to_string());
+        cause = next.source();
+    }
+    text
+}
+
 /// Maps command-line arguments (excluding the program name) to a command.
 fn parse_command(args: impl IntoIterator<Item = OsString>) -> Command {
     let mut args = args.into_iter();
     match (args.next(), args.next()) {
         (Some(flag), None) if flag == "--version" || flag == "-V" => Command::Version,
+        (Some(subcommand), None) if subcommand == "serve" => Command::Serve,
         _ => Command::Usage,
+    }
+}
+
+/// Runs the MCP server on stdio, reporting progress and failures on stderr.
+fn run_server(info: BuildInfo) -> ExitCode {
+    let mut stderr = io::stderr().lock();
+    // Best effort: diagnostics must never take the server down.
+    let _ = writeln!(
+        stderr,
+        "{} {} serving MCP on stdio",
+        info.name, info.version
+    );
+
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to start async runtime: {error}"))
+        .and_then(|runtime| {
+            runtime
+                .block_on(osrs_mcp::mcp::serve_stdio())
+                .map_err(|error| describe(&error))
+        });
+
+    match result {
+        Ok(()) => {
+            let _ = writeln!(stderr, "{} stopped: client disconnected", info.name);
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            let _ = writeln!(stderr, "{} failed: {message}", info.name);
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -57,7 +107,7 @@ fn write_version(out: &mut impl Write, info: BuildInfo) -> io::Result<()> {
 fn write_usage(out: &mut impl Write, info: BuildInfo) -> io::Result<()> {
     writeln!(
         out,
-        "{name} {version}\n\nUsage: {name} --version\n\nNo server is implemented yet.",
+        "{name} {version}\n\nUsage:\n  {name} serve      Serve MCP over stdio (for MCP clients)\n  {name} --version  Print the version",
         name = info.name,
         version = info.version,
     )
@@ -83,10 +133,23 @@ mod tests {
     }
 
     #[test]
+    fn describe_appends_the_cause_of_a_serve_error() {
+        let error =
+            osrs_mcp::mcp::ServeError::Initialize(Box::new(io::Error::other("pipe closed")));
+        assert_eq!(describe(&error), "MCP initialization failed: pipe closed");
+    }
+
+    #[test]
+    fn serve_subcommand_selects_serve() {
+        assert_eq!(parse(&["serve"]), Command::Serve);
+    }
+
+    #[test]
     fn missing_extra_or_unknown_arguments_select_usage() {
         assert_eq!(parse(&[]), Command::Usage);
         assert_eq!(parse(&["--help"]), Command::Usage);
         assert_eq!(parse(&["--version", "extra"]), Command::Usage);
+        assert_eq!(parse(&["serve", "extra"]), Command::Usage);
     }
 
     #[cfg(unix)]
@@ -106,10 +169,11 @@ mod tests {
     }
 
     #[test]
-    fn usage_output_names_the_supported_flag() {
+    fn usage_output_names_the_supported_commands() {
         let mut out = Vec::new();
         write_usage(&mut out, INFO).unwrap();
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("Usage: osrs-mcp --version"), "usage: {text}");
+        assert!(text.contains("osrs-mcp serve"), "usage: {text}");
+        assert!(text.contains("osrs-mcp --version"), "usage: {text}");
     }
 }
