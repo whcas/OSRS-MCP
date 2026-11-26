@@ -23,13 +23,23 @@
 //!
 //! # Hardcore worlds
 //!
-//! The maintainer specifies a 0% Grand Exchange tax on Hardcore Main Worlds
-//! (issue #14, clarification of 2026-11-26): callers pricing Hardcore trades
-//! pass [`FeePolicy::NoFees`], an explicit assertion rather than a default.
-//! This is a maintainer-provided game rule, not independently verified against
-//! live trades, and this module deliberately contains no world-specific rules
-//! so that it stays correct if that changes. Standard-world tax is never
-//! applied implicitly.
+//! Callers pricing Hardcore Main World trades pass [`FeePolicy::NoFees`], an
+//! explicit assertion rather than a default. Provenance of that rule:
+//!
+//! - **Maintainer-verified in game:** the Grand Exchange's Convenience Fees
+//!   interface on Hardcore Worlds states that no fee is charged (issue #14,
+//!   maintainer observation of 2026-11-26). Not independently verified from
+//!   public documentation.
+//! - **Standard worlds, for contrast:** the OSRS Wiki's Grand Exchange page,
+//!   <https://oldschool.runescape.wiki/w/Grand_Exchange>, documents a 2% tax,
+//!   rounded down per item, capped at 5,000,000 GP per item, with some item
+//!   exemptions. That is [`FeePolicy::PercentOfSale`] with `rate_basis_points:
+//!   200` and `cap_per_unit: Some(5_000_000)`, but the item exemptions are not
+//!   modelled (see "Scope of a fee policy").
+//!
+//! This module deliberately contains no world-specific rules, so it stays
+//! correct if either rule changes. Standard-world tax is never applied
+//! implicitly to Hardcore trades, and vice versa.
 //!
 //! # Scope of a fee policy
 //!
@@ -422,7 +432,7 @@ mod tests {
 
     #[test]
     fn worked_hardcore_trade_with_an_explicit_zero_fee_policy() {
-        // Maintainer rule: no GE tax on Hardcore Main Worlds, asserted by the
+        // Maintainer-verified: no GE fee on Hardcore Main Worlds, asserted by the
         // caller with `NoFees`. Buy 100 at 1,000; sell 100 at 1,100.
         // Net = 110,000 - 100,000 = 10,000, which is 10% = 1,000 bp.
         let outcome = evaluate(&trade(1_000, 1_100, 100, FeePolicy::NoFees)).unwrap();
@@ -486,6 +496,88 @@ mod tests {
         // 2% of 49 is 0.98, floored to 0 per unit.
         let outcome = evaluate(&trade(10, 49, 1_000, TWO_PERCENT)).unwrap();
         assert_eq!(outcome.fees, Some(gp(0)));
+    }
+
+    /// The standard-world Grand Exchange rule as documented on the OSRS Wiki:
+    /// 2%, rounded down per item, capped at 5,000,000 GP per item. Expressed as
+    /// an explicit policy value in tests only; this module hardcodes no world.
+    const STANDARD_WORLD_TAX: FeePolicy = FeePolicy::PercentOfSale {
+        rate_basis_points: 200,
+        cap_per_unit: Some(Gp::new(5_000_000)),
+    };
+
+    fn fees_for_one_unit_sold_at(price: i64, policy: FeePolicy) -> Gp {
+        evaluate(&trade(0, price, 1, policy)).unwrap().fees.unwrap()
+    }
+
+    #[test]
+    fn rounding_boundary_between_49_and_50_gp() {
+        // 2% of 49 is 0.98 and floors to 0; 2% of 50 is exactly 1.
+        assert_eq!(fees_for_one_unit_sold_at(49, STANDARD_WORLD_TAX), gp(0));
+        assert_eq!(fees_for_one_unit_sold_at(50, STANDARD_WORLD_TAX), gp(1));
+        // The next boundary: 2% of 99 is 1.98 -> 1, and of 100 is exactly 2.
+        assert_eq!(fees_for_one_unit_sold_at(99, STANDARD_WORLD_TAX), gp(1));
+        assert_eq!(fees_for_one_unit_sold_at(100, STANDARD_WORLD_TAX), gp(2));
+    }
+
+    #[test]
+    fn fee_is_rounded_per_unit_before_multiplying_by_quantity() {
+        // 49 GP each: every unit floors to 0, so selling 1,000 of them is
+        // untaxed. Rounding the 49,000 total instead would give 980.
+        let outcome = evaluate(&trade(0, 49, 1_000, STANDARD_WORLD_TAX)).unwrap();
+        assert_eq!(outcome.fees, Some(gp(0)));
+
+        // 149 GP each: floor(2.98) = 2 per unit, so 3 units pay 6. Rounding
+        // the 447 total instead would give floor(8.94) = 8.
+        let outcome = evaluate(&trade(0, 149, 3, STANDARD_WORLD_TAX)).unwrap();
+        assert_eq!(outcome.fees, Some(gp(6)));
+    }
+
+    #[test]
+    fn five_million_cap_boundary_at_the_per_item_fee() {
+        // 2% reaches exactly 5,000,000 at a 250,000,000 sale price.
+        assert_eq!(
+            fees_for_one_unit_sold_at(249_999_999, STANDARD_WORLD_TAX),
+            gp(4_999_999)
+        );
+        assert_eq!(
+            fees_for_one_unit_sold_at(250_000_000, STANDARD_WORLD_TAX),
+            gp(5_000_000)
+        );
+        // Above that the cap binds.
+        assert_eq!(
+            fees_for_one_unit_sold_at(250_000_001, STANDARD_WORLD_TAX),
+            gp(5_000_000)
+        );
+        assert_eq!(
+            fees_for_one_unit_sold_at(2_000_000_000, STANDARD_WORLD_TAX),
+            gp(5_000_000)
+        );
+    }
+
+    #[test]
+    fn the_cap_applies_per_item_not_per_sale() {
+        // Three items at 500,000,000: each is capped at 5,000,000, so 15,000,000.
+        let outcome = evaluate(&trade(0, 500_000_000, 3, STANDARD_WORLD_TAX)).unwrap();
+        assert_eq!(outcome.fees, Some(gp(15_000_000)));
+        assert_eq!(outcome.net_profit, Some(gp(1_485_000_000)));
+    }
+
+    #[test]
+    fn hardcore_zero_fee_policy_charges_nothing_where_standard_tax_would() {
+        // Same high-value sale under both explicit policies: the standard-world
+        // policy takes the capped 5,000,000 per item, the Hardcore assertion
+        // takes nothing and leaves the whole sale as profit.
+        let standard = evaluate(&trade(0, 500_000_000, 2, STANDARD_WORLD_TAX)).unwrap();
+        assert_eq!(standard.fees, Some(gp(10_000_000)));
+
+        let hardcore = evaluate(&trade(0, 500_000_000, 2, FeePolicy::NoFees)).unwrap();
+        assert_eq!(hardcore.fees, Some(gp(0)));
+        assert_eq!(hardcore.net_profit, Some(gp(1_000_000_000)));
+
+        // Low-priced items that the standard rule rounds to zero anyway.
+        let hardcore = evaluate(&trade(0, 50, 7, FeePolicy::NoFees)).unwrap();
+        assert_eq!(hardcore.fees, Some(gp(0)));
     }
 
     #[test]
