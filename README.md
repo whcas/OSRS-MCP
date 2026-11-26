@@ -57,6 +57,16 @@ scripts/check.sh audit
 
 It checks advisories, banned crates and crate sources, configured in [`deny.toml`](deny.toml). Licence checks are not enabled yet because the project licence has not been decided.
 
+### Lints
+
+`Cargo.toml` sets a strict baseline, and CI denies all warnings:
+
+- **Clippy groups:** `all`, `pedantic` and `nursery` are enabled.
+- **Restriction lints:** the restriction group is not enabled wholesale. A selected set targets panics in production code (`unwrap_used`, `expect_used`, `panic`, `todo`, `unimplemented`, `unreachable` and related lints), direct printing (`print_stdout`, `print_stderr`, `dbg_macro`), keeping stdout free for protocol output, and suppressions that don't say why (`allow_attributes`, `allow_attributes_without_reason`).
+- **rustc lints:** unsafe code is forbidden. Several extra lints are on, including `missing_docs`, `missing_debug_implementations`, `unreachable_pub` and `unused_qualifications`.
+
+`clippy.toml` allows panics, unwraps and printing in tests only. When a lint must be silenced elsewhere, use a narrowly scoped `#[expect(lint, reason = "...")]` rather than `#[allow]`. Cargo metadata lints wait until the package metadata and licence are settled (#8).
+
 ### CI
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pull requests, pushes to `main`, a weekly schedule and manual dispatch. It uses read-only repository permissions and needs no secrets. Scheduled runs execute only the dependency audit.

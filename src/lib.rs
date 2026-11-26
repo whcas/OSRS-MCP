@@ -14,7 +14,7 @@ pub struct BuildInfo {
 
 /// Returns build metadata taken from Cargo at compile time.
 #[must_use]
-pub fn build_info() -> BuildInfo {
+pub const fn build_info() -> BuildInfo {
     BuildInfo {
         name: env!("CARGO_PKG_NAME"),
         version: env!("CARGO_PKG_VERSION"),
