@@ -35,8 +35,9 @@
 //!   client with explicit timeouts and no system TLS dependency. Redirects are
 //!   disabled and bodies are read in bounded chunks, so the JSON, query-string
 //!   and compression features are not enabled.
-//! - `serde` and `serde_json` (with `arbitrary_precision`, so number literals
-//!   keep their exact text for decimal handling): response parsing. Bodies are
+//! - `serde` and `serde_json` (with `raw_value`, so average prices are read
+//!   from their exact text without a global change to JSON number handling):
+//!   response parsing. Bodies are
 //!   parsed by this crate from already-bounded bytes rather than by `reqwest`.
 //! - `tokio` is a dev-dependency only, for the loopback server used in
 //!   `tests/market_client.rs`.

@@ -8,9 +8,12 @@ repository = "https://github.com/whcas/OSRS-MCP"
 publish = false
 
 [dependencies]
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.154", features = ["arbitrary_precision"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+serde = { version = "1", features = ["derive"] }
+# `raw_value` only adds the `RawValue` type, used to read number literals as
+# written. It changes no existing behaviour, unlike `arbitrary_precision`,
+# which is global and could alter other crates' JSON handling.
+serde_json = { version = "1", features = ["raw_value"] }
 
 # Lint baseline: see "Lints" in README.md. CI runs Clippy with `-D warnings`,
 # so every `warn` below fails the build. Group levels use priority -1 so the
@@ -65,4 +68,4 @@ str_to_string = "warn"
 undocumented_unsafe_blocks = "warn"
 
 [dev-dependencies]
-tokio = { version = "1.54.1", features = ["rt", "macros", "net", "io-util", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }

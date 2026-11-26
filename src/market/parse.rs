@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
-use serde_json::Number;
+use serde_json::value::RawValue;
 
 use super::error::MarketDataError;
 use super::model::{
@@ -28,9 +28,9 @@ struct LatestEntry {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WindowEntry {
-    avg_high_price: Option<Number>,
+    avg_high_price: Option<Box<RawValue>>,
     high_price_volume: u64,
-    avg_low_price: Option<Number>,
+    avg_low_price: Option<Box<RawValue>>,
     low_price_volume: u64,
 }
 
@@ -44,9 +44,9 @@ struct WindowBody {
 #[serde(rename_all = "camelCase")]
 struct SeriesPointEntry {
     timestamp: u64,
-    avg_high_price: Option<Number>,
+    avg_high_price: Option<Box<RawValue>>,
     high_price_volume: u64,
-    avg_low_price: Option<Number>,
+    avg_low_price: Option<Box<RawValue>>,
     low_price_volume: u64,
 }
 
@@ -91,14 +91,13 @@ fn item_id(endpoint: Endpoint, key: &str) -> Result<ItemId, MarketDataError> {
         .map_err(|_| malformed(endpoint, format!("item key {key:?} is not an item id")))
 }
 
-/// Converts a JSON number to hundredths of a GP from its exact text.
+/// Converts a JSON number literal to hundredths of a GP from its exact text.
 ///
-/// `serde_json` is built with `arbitrary_precision`, so a `Number` keeps the
-/// literal as written and no floating-point rounding happens. More than two
-/// decimals, negatives and exponent notation (`1e3`) are rejected rather than
-/// rounded or interpreted.
-fn average_price(endpoint: Endpoint, number: &Number) -> Result<AveragePrice, MarketDataError> {
-    let text = number.to_string();
+/// The literal is captured as a `RawValue`, so no floating-point rounding
+/// happens. More than two decimals, negatives and exponent notation (`1e3`)
+/// are rejected rather than rounded or interpreted.
+fn average_price(endpoint: Endpoint, number: &RawValue) -> Result<AveragePrice, MarketDataError> {
+    let text = number.get();
     let bad = || {
         malformed(
             endpoint,
@@ -108,7 +107,7 @@ fn average_price(endpoint: Endpoint, number: &Number) -> Result<AveragePrice, Ma
     if text.contains(['-', 'e', 'E']) {
         return Err(bad());
     }
-    let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
     if fraction.len() > 2 {
         return Err(bad());
     }
@@ -123,7 +122,7 @@ fn average_price(endpoint: Endpoint, number: &Number) -> Result<AveragePrice, Ma
 
 fn side_stats(
     endpoint: Endpoint,
-    average: Option<&Number>,
+    average: Option<&RawValue>,
     volume: u64,
 ) -> Result<SideStats, MarketDataError> {
     Ok(SideStats {
@@ -136,12 +135,12 @@ fn window_stats(endpoint: Endpoint, entry: &WindowEntry) -> Result<WindowStats, 
     Ok(WindowStats {
         high: side_stats(
             endpoint,
-            entry.avg_high_price.as_ref(),
+            entry.avg_high_price.as_deref(),
             entry.high_price_volume,
         )?,
         low: side_stats(
             endpoint,
-            entry.avg_low_price.as_ref(),
+            entry.avg_low_price.as_deref(),
             entry.low_price_volume,
         )?,
     })
@@ -243,12 +242,12 @@ pub(super) fn timeseries(body: &[u8], requested: ItemId) -> Result<Series, Marke
                 stats: WindowStats {
                     high: side_stats(
                         ENDPOINT,
-                        point.avg_high_price.as_ref(),
+                        point.avg_high_price.as_deref(),
                         point.high_price_volume,
                     )?,
                     low: side_stats(
                         ENDPOINT,
-                        point.avg_low_price.as_ref(),
+                        point.avg_low_price.as_deref(),
                         point.low_price_volume,
                     )?,
                 },
@@ -383,7 +382,7 @@ mod tests {
     #[test]
     fn average_prices_are_exact_or_rejected() {
         let parse = |text: &str| {
-            let number: Number = serde_json::from_str(text).unwrap();
+            let number: Box<RawValue> = serde_json::from_str(text).unwrap();
             average_price(Endpoint::OneHour, &number)
         };
         assert_eq!(parse("0").unwrap().hundredths, 0);
@@ -407,9 +406,9 @@ mod tests {
 
     #[test]
     fn exponent_notation_is_rejected_not_interpreted() {
-        let number: Number = serde_json::from_str("1e3").unwrap();
+        let number: Box<RawValue> = serde_json::from_str("1e3").unwrap();
         assert!(is_malformed(&average_price(Endpoint::OneHour, &number)));
-        let number: Number = serde_json::from_str("1.5E2").unwrap();
+        let number: Box<RawValue> = serde_json::from_str("1.5E2").unwrap();
         assert!(is_malformed(&average_price(Endpoint::OneHour, &number)));
     }
 
