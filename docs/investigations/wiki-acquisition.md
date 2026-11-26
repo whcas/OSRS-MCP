@@ -1,12 +1,14 @@
 # Investigation: OSRS Wiki acquisition and licensing
 
-- Status: Proposed. The maintainer has deferred the consent request and any Wiki acquisition (2026-11-26); the permission questions remain open (see [Open questions](#open-questions)) and nothing should be fetched in bulk until they are answered.
+- Status: Proposed. Revised on 2026-11-26 to follow the maintainer's decision (issue #6) to use human-selected, manually exported `Special:Export` XML as the MVP input. Automated acquisition and operator contact are parked, and the licensing and permission questions remain open (see [Open questions](#open-questions)).
 - Date: 2026-11-26
 - Related issues: #6 (this investigation), #16 (retrieval evaluation dataset), #8 (project licence)
 
 ## Summary
 
-Recommendation, in one paragraph: do **not** start acquiring Wiki content yet. The Wiki text is licensed CC BY-NC-SA 3.0 with additional terms, and the host's Terms of Use prohibit automated use of its sites without prior consent from the operator. No public database dump was found. Before building any ingestion, the maintainer should ask the Wiki operator (Weird Gloop) for consent to a small, serial, identified MediaWiki API client and whether dumps exist. Until then, develop the chunker and index against small synthetic fixtures that carry their own hand-written ground truth; the #16 Wiki benchmark is meant for a permitted real corpus and must not be run against synthetic content. If consent is given, fetch on demand and refresh incrementally through the MediaWiki API into an ignored local directory, never committed, indexed section by section with revision provenance.
+**Recommendation:** use **human-selected, manually downloaded MediaWiki `Special:Export` XML files** as the MVP input, imported locally. Store pages revision by revision, split them into sections for retrieval, and keep a persistent, deduplicated list of page titles the application found missing, formatted so the maintainer can paste it into the export form. The application and its agents must not fetch Wiki pages, automate the export form, crawl, or contact the operator. See [ADR-0002](../adr/0002-manual-wiki-export-corpus.md) for the short decision record.
+
+Manual export removes the need for an automated access mechanism, which was the main blocker found by this investigation (the host's Terms of Use prohibit automated use of its sites without prior consent). It does **not** settle reuse, attribution, ShareAlike, private indexing or the transmission of excerpts to hosted models. Those stay open, and real-corpus indexing and use should wait until the applicable terms have been verified. Automated acquisition (the MediaWiki API) and any message to the operator remain **parked**; the earlier analysis of both is kept below because it explains why.
 
 ## How this was investigated, and what is not verified
 
@@ -14,7 +16,7 @@ This investigation was done from a sandboxed environment whose network policy bl
 
 - Quotes below are short and were extracted by that tool; they were not read directly from a browser. Treat them as leads to re-check before relying on them for a legal decision.
 - `api.php`, `Special:Version` and other `Special:` pages could not be fetched, because the tool honours `robots.txt` (which disallows them for generic agents; see below). **Installed extensions, API parameters, API limits and the availability of `maxlag`, `action=parse` section output or structured-data queries on this wiki are therefore unverified.** The MediaWiki behaviours described are standard documented MediaWiki behaviour, not observed on this wiki.
-- No Wiki dump, mirror or live API response was downloaded or inspected. Wiki size (page count, bytes) is **not measured**; figures must be taken from a first permitted sample.
+- No Wiki dump, mirror, export file or live API response was downloaded or inspected by this session. The one export sample was supplied by the maintainer and is described here only from the maintainer's report. Wiki size (page count, bytes) is **not measured**.
 - Observation date for everything below: 2026-11-26. Page dates quoted are as reported by the fetch tool.
 
 ## Evidence quality
@@ -36,6 +38,7 @@ Every claim below passed through the fetch tool's model-based extraction; none w
 | Real-time Prices guidance (User-Agent, rate expectations) | Quoted, one fetch | Applies to the price API only |
 | 2018 forum answer | Quoted; the tool reported checking the quotes against the text | Informal and old |
 | No dump found | Reported: two Meta pages returned a tool-level "client error" (cause unknown, so a missing page and a blocked fetch are indistinguishable); the Meta main page was reported to link no dumps | Weak. A dump may exist |
+| Real manual export sample: 8 pages, 170,106 bytes, export namespace 0.11, generator 1.45.3; page ids, namespaces, revision ids and timestamps, hashes, wikitext, explicit redirects whose targets are absent, nested templates, inline tables and unexpanded dynamically generated tables | **Maintainer-reported** in issue #6. This session has not seen the file, which must stay out of Git | One current-revision sample; not a guarantee of the schema for every page or export option |
 | Community dataset licences, release dates and contents | Reported; several points were marked as summaries by the tool, and `osrsbox-db`'s last commit date was not seen | Re-check on the repositories |
 
 ## Sources consulted
@@ -67,7 +70,7 @@ Every claim below passed through the fetch tool's model-based extraction; none w
 - **Price API guidance** (Real-time Prices page): "This is the only thing we ask!" is a descriptive User-Agent with optional contact details; several default agents (curl, python-requests, Java and others) are pre-emptively blocked; endpoints are not explicitly rate limited, but heavy sustained use may be limited, and real-time pipelines should first speak to the operators. This guidance is specific to the price API (`prices.runescape.wiki`) and should not be assumed to extend to `api.php`.
 - **2018 forum answer** (informal, archived): no API-specific terms; the general Terms of Use apply; a custom User-Agent is preferred; be reasonable on request rate. The respondent said written guidance would follow; none was found.
 
-Taken together, the content licence and API/bot rules point in different directions, and the written rules do not clearly cover a small, polite, identified client. Ask rather than assume.
+Taken together, the content licence and API/bot rules point in different directions, and the written rules do not clearly cover a small, polite, identified client. Rather than assume, the MVP avoids automated access altogether (option G); asking the operator is parked.
 
 ### Distinguishing the layers
 
@@ -88,28 +91,32 @@ When Wiki content is sent to a hosted LLM through MCP, the model provider receiv
 
 | Option | Content and coverage | Availability and maintenance (verified) | Licensing and rules | Cost and effort | Assessment |
 | --- | --- | --- | --- | --- | --- |
-| **A. MediaWiki API, on demand and incremental refresh** | Whole Wiki: wikitext, rendered HTML, redirects, revision ids and timestamps, section lists. Template and module output is available through rendered output. | Standard MediaWiki feature; the Wiki reports MediaWiki 1.45.3. Endpoint behaviour on this wiki **not verified** (could not fetch `api.php`). | `robots.txt` disallows `api.php` for generic agents; Terms require prior consent for automated use. Etiquette: identified User-Agent, serial requests, batching titles with `\|`, `maxlag` for non-interactive jobs. | Low engineering effort. Cost is the permission step and polite request pacing. Initial population volume unmeasured. | Best technical fit if consent is obtained. |
-| **B. Official database dump** | Would be complete, including history if full dumps. | **No dump found.** Weird Gloop Meta `Data_dumps` and `Dumps` pages returned permanent errors, the Meta main page links no dumps, `dumps.weirdgloop.org` could not be checked. Existence is **unknown**, not disproven. | Would still carry the content licence. Avoids load on live site. | Unknown size; needs wikitext parser or template expansion, since raw wikitext lacks expanded templates. | Ask the operator. Preferred if it exists. |
-| **C. `Special:Export` or HTML page scraping** | Per page. HTML paths (`/w/Title`) are not disallowed. | Available in principle. | Scraping falls under the same automated-use consent; `Special:` is disallowed. | Fragile HTML parsing, more load per page than API batching. | Reject as a bulk method. Acceptable only for a handful of manual spot checks. |
+| **A. MediaWiki API, on demand and incremental refresh** | Whole Wiki: wikitext, rendered HTML, redirects, revision ids and timestamps, section lists. Template and module output is available through rendered output. | Standard MediaWiki feature; the Wiki reports MediaWiki 1.45.3. Endpoint behaviour on this wiki **not verified** (could not fetch `api.php`). | `robots.txt` disallows `api.php` for generic agents; Terms require prior consent for automated use. Etiquette: identified User-Agent, serial requests, batching titles with `\|`, `maxlag` for non-interactive jobs. | Low engineering effort. Cost is the permission step and polite request pacing. Initial population volume unmeasured. | Best technical fit if consent were obtained. **Parked.** |
+| **B. Official database dump** | Would be complete, including history if full dumps. | **No dump found.** Weird Gloop Meta `Data_dumps` and `Dumps` pages returned permanent errors, the Meta main page links no dumps, `dumps.weirdgloop.org` could not be checked. Existence is **unknown**, not disproven. | Would still carry the content licence. Avoids load on live site. | Unknown size; needs wikitext parser or template expansion, since raw wikitext lacks expanded templates. | Parked with operator contact. Would be preferred if it exists. |
+| **C. Automated `Special:Export` or HTML page scraping** | Per page. HTML paths (`/w/Title`) are not disallowed. | Available in principle. | Automating either falls under the same automated-use consent; `robots.txt` disallows `Special:` for generic agents. | Fragile HTML parsing, more load per page than API batching. | Reject. The application and its agents must not do this. The human-driven form is option G. |
 | **D. Community datasets (`osrsbox`, `osrsreboxed`, `runeql-data`)** | Structured item, monster and prayer data (stats, examine text, Wiki names and URLs). No article prose, so they cannot serve section retrieval. | `osrsbox` latest PyPI release 2.2.3 (2021-09-30, per the PyPI page); `osrsreboxed` 2.3.33 (2025-01-07); `osrsbox-db` shows no release information and unverified recent activity; `runeql-data` is a downstream staging repo with no licence shown. Update processes are manual or semi-manual, and skill requirements are hand-maintained. | Code GPL-3.0; Wiki-derived data CC BY-NC-SA 3.0. | Cheap to read, but staleness and licence mixing. | Not a retrieval source. Possibly a cross-check for item identifiers later; decide in the structured-data work, not here. |
 | **E. Third-party Wiki mirrors or archives** | Not assessed. | No mirror was verified. Not looked up in depth; an unofficial mirror's freshness and terms would need checking. | Mirrors may not honour attribution or may be stale. | Unknown. | Not recommended without a verified, maintained mirror. |
 | **F. Game cache** | Authoritative structured game data, no prose. | Out of scope for this issue. | Jagex terms apply. | Significant. | Separate decision for the structured-data workstream. |
+| **G. Manual `Special:Export` XML, chosen and downloaded by a human (selected MVP)** | Only the pages the human selects, current revision by default. The maintainer-reported sample shows page and revision metadata, raw wikitext and explicit redirects. Templates, redirect targets and linked pages are present only if they were also selected, and dynamically generated tables stay unexpanded. | Export UI is at `https://oldschool.runescape.wiki/w/Special:Export` (maintainer-supplied). Behaviour is known from one maintainer-supplied sample only. | No automated access, so the automated-use clause is not engaged by the application. Whether a human using the export form is covered is not concluded here. Manual export does **not** settle reuse, attribution, ShareAlike, private indexing or excerpts sent to hosted models. | Low engineering effort (an offline XML importer). Ongoing human effort: select pages, download, drop files in an ignored folder. A demand-driven queue keeps that effort small. | **Recommended for the MVP**, with the licensing questions kept open. |
 
 ## Recommendation
 
-1. **Ask first.** The maintainer contacts Weird Gloop (the `#api-discussion` channel named on the Real-time Prices page is the stated route for pipeline questions) with the request below.
-2. **Preferred outcome: a dump.** If one exists, use it for the initial local corpus and refresh from it.
-3. **Otherwise, with consent: option A**, with these constraints written into the client when it is built:
-   - Descriptive User-Agent naming the project and a contact route chosen by the maintainer, not hard-coded personal details.
-   - Serial requests only, batched titles, `maxlag` set, generous delay, a hard daily request budget, and an off switch.
-   - Fetch is user-initiated or scheduled at low frequency, never at query time from an LLM request.
-   - Responses are bounded in size; errors back off.
-   - Refresh incrementally: compare stored revision ids against `recentchanges` or a revision-id query, and fetch only changed pages.
-4. **Local storage only.** Raw responses and indexes live in the already-ignored `/wiki-dump/` and `/indexes/` directories (see `.gitignore`). Nothing from the Wiki is committed, and tests use small synthetic fixtures.
-5. **No bundled Wiki data in releases** until the share-alike and non-commercial questions are answered.
-6. **Interim work that does not need the Wiki:** implement and test the chunker and index against small synthetic fixtures. A synthetic corpus needs its own hand-written ground truth (a handful of invented pages with known sections and queries) and tests mechanics such as section splitting, redirect aliases and provenance fields. Its scores say nothing about retrieval quality on real Wiki content. The #16 dataset refers to real Wiki pages and can only be run against a permitted real corpus, so it waits for the consent decision.
+1. **Input:** human-selected, manually downloaded `Special:Export` XML (option G), current revision by default. Files go in an ignored local directory (see `.gitignore`); nothing from them is committed.
+2. **Import:** an offline importer reads the XML and stores each page revision with its page id, namespace, title, revision id, timestamp and content hash. Re-importing the same revision is a no-op, a newer revision of the same page replaces the current one and keeps the old revision id, and unknown or absent fields are recorded as absent, not guessed. The importer never fetches anything.
+3. **Redirects, templates and links are explicit.** A redirect whose target is not in the corpus is stored as a redirect with a *missing target*, not dropped and not silently resolved. The same applies to templates and pages that other pages refer to. Do not try to fully render MediaWiki initially: keep raw wikitext, split on headings, and keep tables and unexpanded template calls as they appear, marked as such.
+4. **Retrieval:** section-aware keyword retrieval over what has been imported (see the indexing section), returning a bounded number of sections with provenance. Results and tool output say when relevant knowledge is missing from the corpus.
+5. **Demand-driven requests:** when a query or an import shows a relevant page is missing (a redirect target, a template needed to understand a section, a page a user asked about), add its title to a **persistent, deduplicated request list**. The list is paste-ready for the human, one title per line, and records why each title was requested. Request only knowledge that is relevant, not every link recursively. The human decides what to export and when. The application only produces the list.
+6. **Provenance and attribution:** every returned section carries its page title, section path, page and revision ids, timestamp and a link to the source page, so attribution is possible later.
+7. **Boundaries:** no automatic Wiki requests, no automation of the export form, no crawling, no contact with the operator, no real Wiki text or exports in Git, fixtures or tests, and no bundled Wiki data in releases.
+8. **Before using a real corpus:** verify the applicable terms (reuse, attribution, ShareAlike, private indexing and excerpts sent to hosted models), and get approval before any new external transfer or redistribution. Manual export is not blanket consent for any of these.
+9. **Synthetic work proceeds independently.** The importer, section splitter, storage and retrieval can be built and tested against small **synthetic** XML that mimics the observed structure, with its own hand-written ground truth. Synthetic scores say nothing about real Wiki retrieval quality. The #16 benchmark refers to real pages and is run against a real corpus only on an opt-in basis, subject to the permissions above.
+10. **Parked:** automated acquisition through the MediaWiki API, requests for dumps, and any message to Weird Gloop. The draft below is kept for the maintainer's use and has **not** been sent. Do not block the MVP on these.
 
-Draft request to the operator (for the maintainer to adapt; **not sent**: this thread contacts nobody). Each use is asked about separately so the answers do not blur together:
+Implementation is tracked separately: #32 (offline XML importer), #33 (section-aware wikitext preparation), #34 (local storage and keyword retrieval), #35 (demand-driven manual request queue), #36 (MCP tools, read-only by default) and #37 (coverage-aware retrieval evaluation). This pull request stays documentation only.
+
+### Parked: draft request to the operator
+
+This text is for the maintainer if they decide to contact the operator later. **It has not been sent and nothing in this project sends it.** Each use is asked about separately so the answers do not blur together:
 
 > I'm building a free, read-only Old School RuneScape advisory tool. The code may be published as open source; I would not publish Wiki content in the repository. The tool lets a user's chosen LLM look up Wiki sections through MCP. Hosted model providers selected by the user may therefore receive bounded excerpts of Wiki text, each with a link back to the page and revision. I'd like to ask about each of these separately:
 >
@@ -120,7 +127,11 @@ Draft request to the operator (for the maintainer to adapt; **not sent**: this t
 > 5. **Excerpts sent to LLMs:** is it acceptable for bounded excerpts to be sent to hosted model providers chosen by the user?
 > 6. **Attribution:** what attribution wording do you want shown with returned excerpts?
 
-## Proposed section-aware indexing (design only, nothing is built)
+### Parked: constraints for a future automated client
+
+If automated access is ever approved, these constraints would apply: a descriptive User-Agent with a contact route chosen by the maintainer, serial requests, batched titles, `maxlag`, a generous delay, a hard daily request budget, an off switch, bounded responses with backoff on errors, incremental refresh by comparing revision ids, and never fetching at query time from an LLM request.
+
+## Proposed section-aware indexing from imported exports (design only, nothing is built)
 
 **Unit of retrieval:** a section, identified by its heading path within a page, not a whole page and not an arbitrary fixed-size window.
 
@@ -128,53 +139,63 @@ Draft request to the operator (for the maintainer to adapt; **not sent**: this t
 
 | Field | Purpose |
 | --- | --- |
-| `page_title`, `page_id` | Stable identity, with redirects stored as aliases of the target title |
+| `page_title`, `page_id`, `namespace` | Stable identity, with redirects stored as aliases of the target title |
 | `section_path` (for example `["Strategies", "Safespotting"]`) and `section_anchor` | Human-readable and linkable section identity |
-| `revision_id`, `revision_timestamp` | Provenance of exactly what was indexed |
-| `fetched_at` | Freshness. Missing or stale values stay distinguishable, per the project rules |
+| `revision_id`, `revision_timestamp`, `content_hash` | Provenance of exactly what was imported, taken from the export |
+| `imported_at`, `source_file_id` | Freshness and which export file supplied it. Missing or stale values stay distinguishable, per the project rules |
 | `source_url` | Page URL with the section anchor, and a revision permalink, for attribution |
-| `licence` | The licence string observed in the footer at fetch time |
-| `text` | Plain text of the section |
-| `kind` | Prose, table or list, so tables are not flattened into noise |
+| `text` | Section text as wikitext, with markup stripped only for the searchable form |
+| `kind` | Prose, table, list or `template_only`, so tables and unexpanded template content are not flattened into noise or presented as complete |
 
-**Content form:** rendered output, converted to plain text per section, is preferred to raw wikitext. Wikitext contains unexpanded templates and module calls (infoboxes, drop tables, recipes), which hold much of the useful content. Keep the revision id so the rendered text can be reproduced. Rendered tables should be kept as structured rows, with only a text form indexed. Extracting structured facts (shops, requirements, drops) is a separate workstream and should not be derived from retrieval text.
+**Content form:** the export supplies raw wikitext, so retrieval works on wikitext split at headings. The observed export contains nested templates, inline tables and dynamically generated tables that are not expanded. The importer should keep them as found and mark them (`kind`), not pretend they are rendered. A section that is only a template call is `template_only`, and a result that includes one says so. Extracting structured facts (shops, requirements, drops) is a separate workstream and should not be derived from retrieval text.
 
-**Index:** start with keyword retrieval (title and heading boost plus full text, for example SQLite FTS5, noted as an option only because the README lists SQLite as a proposed direction). Add embeddings only if an evaluation on a permitted real corpus (the #16 benchmark) shows keyword retrieval misses queries that matter, as the README principle says. Redirects and page titles give exact-name matching for free.
+**Missing material is a first-class state.** The corpus records three kinds of absence, each reported to callers and each able to feed the request list: a redirect whose target is not imported, a template or module referred to but not imported, and a page that was asked about but not imported. Retrieval results never imply that absent knowledge does not exist.
+
+**Demand-driven request list:** persistent across runs, deduplicated by normalised title (including redirect sources), with the reason and first-requested date for each entry, and with titles removed once imported. It is plain text, one title per line, ready to paste into the export form's page box. The form's exact input format has not been verified in this investigation and should be confirmed by the maintainer. The list never triggers a request.
+
+**Index:** start with keyword retrieval (title and heading boost plus full text, for example SQLite FTS5, noted as an option only because the README lists SQLite as a proposed direction). Add embeddings only if an evaluation on a permitted real corpus (the #16 benchmark, with the coverage-aware reporting from #37) shows keyword retrieval misses queries that matter, as the README principle says. Redirects and page titles give exact-name matching for free.
 
 **Tool-facing behaviour (for later):** return a bounded number of sections with their provenance, and treat all returned text as untrusted data, per AGENTS.md.
 
-**Coverage questions to measure on a permitted sample:** pages per namespace, template-heavy pages, redirect counts, how tables and collapsible content render, and how update latency compares with game updates.
+**Coverage questions to measure on a permitted sample:** how many redirect targets and templates are missing after a typical selection, how much relevant content sits in unexpanded templates and tables, how large a useful corpus is, and how stale current-revision exports become between game updates.
 
 ## Sample retrieval evaluation
 
-A retrieval evaluation is proposed rather than run, because no retrieval engine exists and no permitted real corpus exists. [#16](https://github.com/whcas/OSRS-MCP/issues/16) defines the Wiki-based dataset, metrics and procedure. The two kinds of evaluation are kept apart:
+A retrieval evaluation is proposed rather than run, because no retrieval engine exists and no permitted real corpus exists. [#16](https://github.com/whcas/OSRS-MCP/issues/16) (PR #27) defines the Wiki-based dataset, metrics and procedure, and #37 tracks a coverage-aware scorer. The corpus now grows incrementally from manual exports, so evaluation must separate two things that look alike in a plain score:
 
-- **Real Wiki benchmark (#16):** judged against real Wiki pages and sections. It can be run only against a corpus acquired with the operator's consent, and it measures retrieval quality on real content.
-- **Synthetic fixtures:** invented pages with their own hand-written expected sections. They test the mechanics of the chunker and index offline, in CI, with no Wiki content. They do not measure real retrieval quality and must not reuse the #16 references.
+- **Corpus coverage:** whether the expected page and section were actually imported, whether a redirect target is present, and whether the expected content exists only in unexpanded templates.
+- **Ranking quality over available material:** whether the engine ranks the expected sections well when they are present.
+
+A judged section that is missing from the corpus is a coverage gap, not a ranking failure, and must be reported as such (never dropped silently and never counted as a ranking success). Two kinds of evaluation are kept apart:
+
+- **Real Wiki benchmark (#16):** judged against real Wiki pages and sections, run only as an opt-in against a real corpus, subject to the permissions above. It measures retrieval on real content.
+- **Synthetic fixtures:** invented pages with their own hand-written expected sections. They test the importer, splitter and index offline, in CI, with no Wiki content. They do not measure real retrieval quality and must not reuse the #16 references.
 
 For this investigation the evidence is limited to a handful of article titles checked for existence through the fetch tool, recorded in the #16 dataset with their observation date. The acquisition options above are **not** benchmarked.
 
 ## Cost and trade-off summary
 
-- **Permission is the real cost.** Engineering for any option is small. The unknown is whether the operator consents, and on what terms.
-- **API route** gives freshness and provenance at the price of load on the operator and an ongoing politeness burden. **Dump route** (if it exists) is cheaper for everyone but may lag and needs template handling.
-- **Staleness risk:** game updates change values; revision ids and fetch timestamps let the advisor flag old text rather than trust it.
-- **Storage:** unmeasured. Likely small enough for a local database, but this is an assumption.
+- **Human effort replaces operator permission as the main cost.** Manual export needs someone to pick pages and download files. The demand-driven list keeps that to the pages that matter, but coverage will be incomplete until enough is imported.
+- **Coverage is the main quality risk.** Missing redirect targets, templates and linked pages, plus unexpanded dynamic tables, can hide relevant content. The design makes this visible instead of hiding it.
+- **Staleness risk:** exports are current-revision snapshots, and game updates change values. Revision ids, timestamps and import dates let the advisor flag old text rather than trust it.
+- **Automated route (parked)** would give freshness at the price of operator load and the consent question; a dump (if one exists) would be cheaper for everyone. Neither blocks the MVP.
+- **Storage:** unmeasured beyond the 8-page, 170,106-byte sample. Likely small enough for a local database, but this is an assumption.
 
 ## Open questions
 
-1. **Consent:** does Weird Gloop consent to a small identified API client, and under what limits? Is a dump available?
-2. **Private local index:** is keeping a local index for personal use permitted, and is that use "non-commercial"? This is a question for the operator or legal advice; it is not concluded here.
+1. **Consent (parked):** does Weird Gloop consent to a small identified API client, and under what limits? Is a dump available? Not pursued while automated acquisition is parked, and the operator is not contacted by this project.
+2. **Private local index:** is keeping a local index of manually exported pages for personal use permitted, and is that use "non-commercial"? Manual export does not answer this. It is a question for the operator or legal advice; it is not concluded here.
 3. **Open-source publication:** does publishing the application code (without Wiki content) as open source affect the non-commercial or ShareAlike terms, or what is permitted for the tool's users?
 4. **Excerpts sent to hosted LLMs:** may bounded excerpts be sent to hosted model providers chosen by the user, and is that redistribution, adaptation or neither under BY-NC-SA 3.0?
 5. **ShareAlike scope:** is a derived index or a bounded section extract an adaptation that must itself be CC BY-NC-SA?
 6. **OSRS Wiki licence row:** the Weird Gloop table has no entry for this wiki. Confirm the licence and any additional terms from the live footer.
 7. **Attribution form:** exact wording the operator wants alongside returned sections.
 8. **robots.txt and AI crawlers:** confirm that a user-run local client with an honest User-Agent is acceptable, given named AI bots are disallowed.
-9. **Unverified technical points:** API availability and limits, installed extensions (the `/w/Bucket:` path in `robots.txt` and a Bucket link on Weird Gloop Meta suggest the Bucket structured-data extension is in use, unconfirmed), `maxlag` support, rendered-table fidelity.
+9. **Manual export and the Terms of Use:** the automated-use clause is not engaged by the application when a human performs the export, but whether the human step is itself covered, and what the export form's own terms say, has not been checked.
+10. **Unverified technical points:** API availability and limits, installed extensions (the `/w/Bucket:` path in `robots.txt` and a Bucket link on Weird Gloop Meta suggest the Bucket structured-data extension is in use, unconfirmed), `maxlag` support, and the export schema beyond the maintainer's one sample (other export options, namespaces and history).
 
 ## Verification and revisit criteria
 
-- The recommendation is revisited when the operator answers question 1, or if a dump or mirror is found.
-- Before any ingestion code is written, record the consent decision (and any limits) in an ADR under `docs/adr/`.
+- Before indexing or using a real corpus, verify the applicable terms (reuse, attribution, ShareAlike, private indexing, excerpts sent to hosted models) and record the outcome in an ADR. Manual export is not blanket consent.
+- Revisit this recommendation if the export schema differs from the sample, if coverage proves too incomplete to be useful, or if the maintainer decides to pursue automated access or contact the operator.
 - Re-check the licence, Terms of Use, `robots.txt` and the Real-time Prices page at that time, since they change; quotes here are dated 2026-11-26.
