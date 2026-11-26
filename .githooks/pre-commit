@@ -1,0 +1,29 @@
+#!/bin/sh
+# Fast, non-mutating pre-commit checks. Opt in with `scripts/install-hooks.sh`.
+#
+# 1. Whitespace errors in the staged changes (`git diff --cached --check`).
+# 2. Rust formatting (`scripts/check.sh fmt`), only when Rust files are staged.
+#
+# Nothing is reformatted or re-staged. The formatting check reads the working
+# tree, not the index: with partial staging it can differ from what is committed.
+# Bypass once with `git commit --no-verify`. CI remains authoritative.
+
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+
+if ! git diff --cached --check; then
+    echo "pre-commit: staged changes have whitespace errors or could not be read (see above); commit aborted." >&2
+    exit 1
+fi
+
+if ! staged_rust=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs'); then
+    echo "pre-commit: could not list staged files (git diff failed); commit aborted." >&2
+    exit 1
+fi
+
+if [ -n "$staged_rust" ]; then
+    if ! scripts/check.sh fmt; then
+        echo "pre-commit: Rust formatting check failed; run \`cargo fmt --all\` and re-stage." >&2
+        exit 1
+    fi
+fi
