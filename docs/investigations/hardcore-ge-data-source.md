@@ -14,7 +14,7 @@ Direct HTTP requests from the development container were blocked by its egress p
 
 - **Verified (one request each):** the six endpoints below returned HTTP 200 `application/json`; field names and value types come from bodies that were returned verbatim (`latest`, `5m`, `timeseries`).
 - **Not verified:** response headers (`Cache-Control`, `Date`, rate-limit headers were not visible); the `1h` top-level `timestamp` and the `mapping` entry count and optional fields (those bodies were truncated by the tool); behaviour under our own `User-Agent`; error responses (4xx/5xx, rate limiting); that the fetch tool's UA was permitted in the same way ours will be.
-- **Live verification has not been done by the maintainer, and not by this investigation from an unrestricted network.** `scripts/verify_hardcore_api.py` is an opt-in script for that; see "Local verification procedure" below. Its output should be pasted into the review once run. Until then, treat everything under "Verified" below as read through the fetch tool only.
+- **Update 2026-11-26:** the opt-in script has since been run from the maintainer's Mac on an unrestricted network; see "Live verification result". The bullets above describe the original, restricted investigation and are kept for the record.
 
 ## Sources compared
 
@@ -51,7 +51,7 @@ The Hardcore `latest` price for item 4151 (8,000,000, last high seen about 12 da
 
 ## Local verification procedure
 
-One procedure, run by a maintainer from a normal machine. Nothing here is run by CI, and **it has not been run yet**.
+One procedure, run by a maintainer from a normal machine. Nothing here is run by CI. It was last run on 2026-11-26 (see "Live verification result").
 
 1. `python3 scripts/verify_hardcore_api.py --compare-standard` (Python 3 standard library only; no installs).
    - Sends six sequential GET requests two seconds apart: `mapping`, `latest?id=4151`, `5m`, `1h` and `timeseries?id=4151&lookback=24h` on `osrs-hc`, plus one `latest?id=4151` on the standard `osrs` path for comparison only.
@@ -86,8 +86,32 @@ Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one e
 | `5m`/`1h` `timestamp` is the block start | Stated by the documentation; the observed `5m` value 1795504200 is a multiple of 300, which is consistent |
 | `timeseries` points are contiguous at `timestep` | **Not so, as observed.** The header said 300, but the first two sampled points are 600 s apart (1795602300 then 1795602900) while the last two are 300 s apart, so steps with no trades appear to be omitted (inferred). Clients must not assume a gap-free series. The documentation also says the timestep is not guaranteed |
 | Averages have at most two decimals | Stated by the documentation; the observed values (e.g. `227.22`) are consistent. Over-precise values are rejected rather than rounded by the client |
-| `1h` top-level `timestamp`, optional `mapping` fields, response headers, error bodies, rate-limit headers | **Not observed** (truncated or invisible via the fetch tool) |
+| `1h` top-level `timestamp`, `mapping` entry count and optional fields, response headers, User-Agent acceptance | **Observed** from the maintainer's Mac on 2026-11-26 with the project User-Agent; see "Live verification result" below |
+| Error bodies (4xx/5xx), rate-limit headers | **Not observed**: every request returned 200 and no `X-RateLimit-*` or `Retry-After` header was present |
 | Whether Hardcore trades are taxed | **Unknown**; not in the API |
+
+## Live verification result (2026-11-26, 11:34 UTC)
+
+`python3 scripts/verify_hardcore_api.py --compare-standard` was run locally (macOS, unrestricted network) with the project User-Agent `osrs-mcp/0.1.0 (+https://github.com/whcas/OSRS-MCP)`. Result: `6/6 requests verified`, all HTTP 200, `Content-Type: application/json; charset=utf-8`, so the project User-Agent is accepted. The schema matches the documented one; nothing in the earlier fetch-tool reading was contradicted.
+
+| Observation | Value |
+| --- | --- |
+| `mapping` | 4682 entries, about 868 KB. `id`, `name`, `examine`, `icon`, `members` present on every entry. **Optional:** `limit` (4165 of 4682), `value` (4659), `highalch` and `lowalch` (4578 each) |
+| `latest?id=4151` | `high`, `highTime`, `low`, `lowTime` all integers this time (the earlier fetch showed `low: null`), so one-sidedness changes over time |
+| `5m` | 362 items; top-level `timestamp` 1795692300 (multiple of 300) |
+| `1h` | 1058 items; top-level `timestamp` 1795683600 (multiple of 3600); present, so the earlier truncation hid it, it did not mean it was absent |
+| `timeseries` 24h | 68 points for a 288-step window; **gaps between points** from 300 s up to 5400 s, so empty steps are omitted. Header `timestep` 300 |
+| Null averages with non-zero volume | 0 across `5m`, `1h` and `timeseries` |
+| Averages with more than two decimals, non-integer volumes | 0 |
+| Headers | `Cache-Control: public, max-age=60, s-maxage=300, stale-while-revalidate=5` on `mapping`; `public, must-revalidate, max-age=60` on `latest`; `Age` and `ETag` on most; **no rate-limit headers, no `Retry-After`, no `Last-Modified`** |
+| Hardcore versus standard, item 4151 | Hardcore `latest` high 6,500,000 / low 6,528,000; standard 636,211 / 631,149. The two worlds differ by a factor of about ten |
+
+Newly observed and relevant to #18:
+
+- In the Hardcore `latest` sample, the instant-sell `low` (6,528,000) was **higher** than the instant-buy `high` (6,500,000), and their timestamps were about 26 minutes apart. A crossed pair is therefore possible and must not be treated as an error or silently corrected. Margin calculations should surface it.
+- `highTime` was 2318 s old and `lowTime` 787 s old when sampled; standard-world times were 91 s and 39 s. Staleness is normal for Hardcore.
+
+Still **inferred or unknown**, not settled by this run: item versus transaction volume, whether the aggregate `High`/`Low` sides match `latest`'s sides, Hardcore GE tax (resolved by decision in #14, not by the API), and non-200 behaviour.
 
 ## Semantics
 
@@ -97,7 +121,7 @@ Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one e
 - **Numbers:** prices can exceed `i32`. Averages can have up to two decimal places (e.g. `227.22`).
 - **Missing values:** items never traded are absent from `latest`. A side never observed is `null` (for `latest`, both price and time). Aggregates use `null` average with volume `0`. Absent and `null` are different from a price of zero and must not be coerced.
 - **Freshness:** not conveyed by the API beyond the timestamps. Hardcore items can have a last trade days old (`highTime` for item 4151 was about 12 days earlier than the standard sample), so staleness must be computed by the client from timestamps against an explicit threshold.
-- **Fees/GE tax:** not documented by this API. Whether and how Hardcore trades are taxed is unresolved and remains an explicit input to #14.
+- **Fees/GE tax:** not documented by this API. The maintainer decision recorded in #14 is a 0% Hardcore GE tax, kept as an explicit configurable input rather than inferred from the API.
 
 ## Usage policy
 
@@ -163,8 +187,8 @@ Dependencies, to justify in #18: `reqwest` (rustls, JSON off; parse with `serde_
 
 ## Open questions
 
-1. Hardcore GE tax: does it apply, at what rate, with what rounding and cap?
-2. Exact `1h` top-level `timestamp` and optional fields in `mapping` for this world type.
-3. Real response headers and rate-limit behaviour for our User-Agent.
+1. ~~Hardcore GE tax~~: decided in #14 as 0% for Hardcore; not derivable from the API.
+2. ~~Exact `1h` top-level `timestamp` and optional `mapping` fields~~: answered by the live verification result.
+3. ~~Real response headers~~: observed. Rate-limit behaviour under load and non-200 responses remain unobserved.
 4. Whether `highPriceVolume` and `lowPriceVolume` count items or transactions.
 5. Whether the aggregate endpoints' "high" and "low" sides match `latest`'s instant-buy and instant-sell sides.
