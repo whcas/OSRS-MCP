@@ -77,7 +77,7 @@ Built by `exportCharacterSnapshot` from `basePayload`, account fields and `build
 
 ## Write semantics and consumption
 
-- Writes use `Files.write` with `CREATE`, `TRUNCATE_EXISTING` and `WRITE`: **not atomic** (no temporary file and rename). A reader can see an empty or truncated file while RuneLite writes. The importer must report invalid JSON as a transient, retryable condition distinct from an unsupported schema, and any later file watcher must debounce.
+- Writes use `Files.write` with `CREATE`, `TRUNCATE_EXISTING` and `WRITE`: **not atomic** (no temporary file and rename). A reader can see an empty or truncated file while RuneLite writes. The importer classifies input that **ends inside a JSON value (including an empty file)** as truncated and retryable, because that is what a write in progress looks like. Other invalid JSON is reported separately and is **not** automatically transient. A later reader or file watcher should debounce and may retry truncated input a bounded number of times.
 - Character exports are throttled to one per second (`CHARACTER_EXPORT_INTERVAL_MS`).
 - Local files are consumed directly from the plugin's directory, with a configurable path, and no manual upload.
 
@@ -114,15 +114,15 @@ Aligned with the maintainer's clarifications on #15 and #19.
 - `exported_at`: an ISO-8601 offset date-time, kept as original text alongside the parsed instant.
 
 **Optional or ignored**
-- `boosted_level` is parsed if present but not used for advice.
+- `boosted_level` is part of the upstream schema and is documented above, but the minimal importer **intentionally ignores it**: it is not parsed, validated or retained, so advice cannot depend on it.
 - `plugin_version` is recorded as text; any value is accepted.
 - `account_name`, `world`, `game_state`, `world_types` and `reason` are not required. `account_name` is a personal identifier and is **not retained**.
 - `session_id` is **not retained**.
 
 **Validation**
-- `real_level` is an integer in `1..=99`; `experience` is an integer in `0..=200_000_000`. Anything else is a typed error.
-- A level inconsistent with the standard experience table is a **warning, not an error**, applied only where the rule is reliable. Do not assume a cap of 99 beyond what the table defines.
-- Missing or non-object `stats`, wrong types and duplicate skills are typed errors. Invalid JSON is reported separately from schema errors because the non-atomic write can produce it transiently.
+- `real_level` is an integer in `1..=99` for **every** skill, including skill names the importer does not recognise; the maintainer has accepted 99 as the hard cap for real levels. `experience` is an integer in `0..=200_000_000`. Anything else is a typed error.
+- A level inconsistent with the standard experience table is a **warning, not an error**, applied only to recognised skills, where the experience table is known to apply. Unknown skills are kept and reported with a warning, and are not checked against the table.
+- Missing or non-object `stats`, wrong types and duplicate skills are typed errors. Truncated input is reported separately (retryable, see "Write semantics"), as is other invalid JSON (not automatically retryable).
 - Skill names are parsed into a known set with an explicit unknown variant, so new skills do not fail the import. Whether unknown skills are kept or only reported is for #19 to decide and document.
 
 **Unknown fields.** Ignored at every level. There is no declared format version to reject.
