@@ -63,6 +63,8 @@ One procedure, run by a maintainer from a normal machine. Nothing here is run by
 4. A non-200 status (for example 403 for a blocked User-Agent, or 429) is itself a result: record it, do not retry in a loop.
 5. Paste the output into the PR. It contains no bulk data. It does not settle whether volume counts items or transactions, or the side semantics of the aggregates; those need a source statement or a controlled observation.
 
+Rust client contract check (also opt-in, never in CI or `scripts/check.sh`): `OSRS_MCP_LIVE_API=1 cargo test --locked --test live_hardcore_api -- --ignored --nocapture`. It makes five sequential requests two seconds apart with `ClientConfig::default()` (the project User-Agent), no retries, asserts only structural facts and prints counts, never bodies. Last run 2026-11-26: passed (mapping 4682 items, `5m` 322, `1h` 1058, `timeseries` 68 points).
+
 Refreshing fixtures in `tests/fixtures/hardcore_ge/` (PR #29) is manual and small, after step 3 shows the schema holds:
 
 ```sh
