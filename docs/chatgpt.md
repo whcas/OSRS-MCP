@@ -51,7 +51,7 @@ only documented via the remote plugin path.
 | --- | --- | --- |
 | ChatGPT web, custom MCP server | Remote servers only, over streamable HTTP or SSE. The endpoint must be reachable at a public HTTPS URL (typically ending `/mcp`) or through a "Secure MCP Tunnel". Authentication: OAuth or none. Both read and write tools are supported; tools without a `readOnlyHint` are treated as writes and confirmed. Workspace policies (including Lockdown) apply. | No: we only have stdio. Needs a streamable HTTP transport and a reachable endpoint. |
 | Codex host: ChatGPT desktop app | Settings → MCP servers → Add server, choosing STDIO or Streamable HTTP. This edits the Codex host configuration shared with the CLI and IDE extension. Not documented as visible to hosted chats or Projects. | **Yes, for Codex-local use only: verified** by the maintainer on 2026-11-26 (see "Codex Desktop result"). |
-| Codex host: CLI / IDE extension | `codex mcp add <name> -- <command>` or a `[mcp_servers.<name>]` table with `command` and `args` in `~/.codex/config.toml`. Default `startup_timeout_sec` 10 and `tool_timeout_sec` 60. | **Yes, for Codex-local use only: verified** for the CLI on 2026-11-26 (see "Codex CLI result"); the IDE extension was not tested. Whether Codex is included in a given subscription is not stated on the pages read. |
+| Codex host: CLI / IDE extension | `codex mcp add <name> -- <command>` or a `[mcp_servers.<name>]` table with `command` and `args` in `~/.codex/config.toml`. Default `startup_timeout_sec` 10 and `tool_timeout_sec` 60. | **Yes, for Codex-local use only: verified** for the CLI on 2026-11-26 (see "Codex CLI result"); the IDE extension was not tested. Whether Codex is included in a given subscription is not stated on the pages read; it worked on the maintainer's account (observed). |
 | Hosted ChatGPT chat / Project | Uses plugins with remote MCP tools; does not read local Codex configuration; local servers may be unavailable in the cloud. | No: needs the remote path in the first row, and is unrelated to the Codex-local results. |
 | Desktop-only plugins (stdio) | Reserved for OpenAI-approved partners, who must request authorisation with an organisation ID. | No: not self-serve. |
 
@@ -94,8 +94,9 @@ count limits.
    all. Based on the documentation this requires the remote path below, so
    expect it to fail with the stdio server. A Codex success does not substitute
    for this, and no hosted compatibility is inferred.
-3. **Meanwhile**, Codex (verified) and Claude Code or Claude Desktop (#4) are
-   the working clients; hosted ChatGPT needs remote hosting.
+3. **Meanwhile**, Codex is the verified ChatGPT-side client. Claude Code is
+   verified too, while the Claude Desktop check (#4) is still open; see
+   `docs/clients.md`. Hosted ChatGPT needs remote hosting.
 4. **Requirements for future remote hosting** (a separate issue and ADR; not
    started here):
    - A streamable HTTP transport (rmcp provides one behind a feature flag),
@@ -132,8 +133,8 @@ restriction encountered.
 ### Codex CLI result (2026-11-26)
 
 - Client: `codex-cli` 0.172.0, signed in with a ChatGPT account, macOS on Apple Silicon (arm64), non-interactive `codex exec --json --ephemeral -s read-only`.
-- Server: `osrs-mcp` 0.1.0, release build of the #3 branch head (`3e394e3`), launched over stdio.
-- Configuration: **no Codex config file was modified.** The server was supplied per run with `-c mcp_servers.osrs.command=<absolute path to osrs-mcp>` and `-c mcp_servers.osrs.args=["serve"]`. Registering it permanently (`codex mcp add` or the `~/.codex/config.toml` snippet above) was therefore not exercised.
+- Server: `osrs-mcp` 0.1.0, a release build of the minimal server from #3 (since merged as #26), launched over stdio.
+- Configuration: **no Codex config file was modified.** The server was supplied per run with `-c mcp_servers.osrs.command=<absolute path to osrs-mcp>` and `-c mcp_servers.osrs.args=["serve"]`. Registering it permanently was therefore not exercised in this step; see "Permanent registration in Codex" below for the later step.
 - Prompt: "Call the osrs MCP server's server_info tool and reply with exactly the JSON it returned."
 - Sanitised events (the `mcp_tool_call` item is the evidence, not the model's reply):
 
@@ -151,7 +152,7 @@ restriction encountered.
 
 ### Permanent registration in Codex (2026-11-26)
 
-- Installed with `cargo install --locked --path .` from the #3 branch head, giving a stable binary at `~/.cargo/bin/osrs-mcp` (outside any worktree).
+- Installed with `cargo install --locked --path .` from the same #3 server (since merged as #26), giving a stable binary at `~/.cargo/bin/osrs-mcp` (outside any worktree).
 - Registered with `codex mcp add osrs -- <home>/.cargo/bin/osrs-mcp serve` after backing up `~/.codex/config.toml`. Codex rewrote the file (entry order, `120` written as `120.0`), but a parsed comparison showed the only semantic change is the new `osrs` entry; existing entries are intact.
 - `codex mcp list` shows `osrs` enabled over stdio, and a `codex exec` run with **no overrides** called `server_info` through the registered entry and got the expected result.
 - Remove with `codex mcp remove osrs`. Rebuild and reinstall after pulling changes.
