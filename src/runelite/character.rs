@@ -65,7 +65,8 @@ impl CharacterExport {
         &self.exported_at
     }
 
-    /// The plugin version recorded in the file, if any. Any text is accepted.
+    /// The plugin version recorded in the file. Any JSON string is accepted
+    /// as is; a missing field or an explicit `null` is `None`.
     #[must_use]
     pub fn plugin_version(&self) -> Option<&str> {
         self.plugin_version.as_deref()
@@ -198,29 +199,14 @@ impl From<serde_json::Error> for CharacterParseError {
 pub fn parse_character_export(bytes: &[u8]) -> Result<CharacterExport, CharacterParseError> {
     // Fields stay as raw JSON text so that `stats` can be read in file order,
     // which a `Value` map would not allow. Unknown fields are never examined.
-    let fields: BTreeMap<String, Box<RawValue>> = serde_json::from_slice(bytes)?;
+    let fields: Fields = serde_json::from_slice(bytes)?;
 
-    let exported_at = match read_value(&fields, "exported_at")? {
-        None => {
-            return Err(CharacterParseError::MissingField {
-                field: "exported_at",
-            });
-        }
-        Some(Value::String(text)) => {
-            ExportedAt::parse(&text).ok_or(CharacterParseError::InvalidTimestamp)?
-        }
-        Some(_) => return Err(CharacterParseError::InvalidTimestamp),
-    };
-    let plugin_version = match read_value(&fields, "plugin_version")? {
-        None | Some(Value::Null) => None,
-        Some(Value::String(version)) => Some(version),
-        Some(_) => return Err(CharacterParseError::InvalidPluginVersion),
-    };
-    let stats = fields
-        .get("stats")
-        .ok_or(CharacterParseError::MissingField { field: "stats" })?;
-    let SkillEntries(entries) = serde_json::from_str(stats.get())?;
-    let (skills, warnings) = read_skills(&entries)?;
+    let exported_at = read_exported_at(&fields)?;
+    let plugin_version = read_plugin_version(&fields)?;
+    let skills = read_skills(&fields)?;
+    // Warnings are advice about records that already parsed; they never decide
+    // whether the import succeeds.
+    let warnings = skills.iter().filter_map(warning_for).collect();
 
     Ok(CharacterExport {
         exported_at,
@@ -230,12 +216,12 @@ pub fn parse_character_export(bytes: &[u8]) -> Result<CharacterExport, Character
     })
 }
 
+/// The top-level fields of the document, each still as raw JSON text.
+type Fields = BTreeMap<String, Box<RawValue>>;
+
 /// A top-level field as a value, or `None` if the file has no such field. An
 /// explicit JSON `null` is `Some(Value::Null)`, not missing.
-fn read_value(
-    fields: &BTreeMap<String, Box<RawValue>>,
-    name: &str,
-) -> Result<Option<Value>, CharacterParseError> {
+fn read_value(fields: &Fields, name: &str) -> Result<Option<Value>, CharacterParseError> {
     fields
         .get(name)
         .map(|raw| serde_json::from_str(raw.get()))
@@ -243,25 +229,50 @@ fn read_value(
         .map_err(CharacterParseError::from)
 }
 
-fn read_skills(
-    entries: &[(String, Value)],
-) -> Result<(Vec<SkillRecord>, Vec<Warning>), CharacterParseError> {
+/// `exported_at`: required, and a timestamp string the plugin could write.
+fn read_exported_at(fields: &Fields) -> Result<ExportedAt, CharacterParseError> {
+    match read_value(fields, "exported_at")? {
+        None => Err(CharacterParseError::MissingField {
+            field: "exported_at",
+        }),
+        Some(Value::String(text)) => {
+            ExportedAt::parse(&text).ok_or(CharacterParseError::InvalidTimestamp)
+        }
+        Some(_) => Err(CharacterParseError::InvalidTimestamp),
+    }
+}
+
+/// `plugin_version`: any string is kept as text; a missing field or an
+/// explicit `null` is `None`; any other JSON type is an error.
+fn read_plugin_version(fields: &Fields) -> Result<Option<String>, CharacterParseError> {
+    match read_value(fields, "plugin_version")? {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(version)) => Ok(Some(version)),
+        Some(_) => Err(CharacterParseError::InvalidPluginVersion),
+    }
+}
+
+/// The skills in `stats`, in file order. The object must be present, non-empty
+/// and free of repeated skill names. Each entry is validated as it is read, so
+/// the first problem in file order is the one reported.
+fn read_skills(fields: &Fields) -> Result<Vec<SkillRecord>, CharacterParseError> {
+    let stats = fields
+        .get("stats")
+        .ok_or(CharacterParseError::MissingField { field: "stats" })?;
+    let SkillEntries(entries) = serde_json::from_str(stats.get())?;
     if entries.is_empty() {
         return Err(CharacterParseError::NoSkills);
     }
+
     let mut seen = HashSet::new();
     let mut skills = Vec::with_capacity(entries.len());
-    let mut warnings = Vec::new();
-
-    for (name, value) in entries {
+    for (name, value) in &entries {
         if !seen.insert(name.as_str()) {
             return Err(CharacterParseError::DuplicateSkill { name: name.clone() });
         }
-        let record = read_skill(name, value)?;
-        warnings.extend(warning_for(&record));
-        skills.push(record);
+        skills.push(read_skill(name, value)?);
     }
-    Ok((skills, warnings))
+    Ok(skills)
 }
 
 fn read_skill(name: &str, value: &Value) -> Result<SkillRecord, CharacterParseError> {
@@ -604,15 +615,60 @@ mod tests {
     }
 
     #[test]
-    fn the_plugin_version_is_recorded_as_text_and_any_value_is_accepted() {
-        let text = r#"{"exported_at":"2026-01-01T00:00Z","plugin_version":"9.9.9-future",
-            "stats":{"Attack":{"real_level":1,"experience":0}}}"#;
+    fn any_plugin_version_string_is_recorded_and_missing_or_null_is_none() {
+        let with_version = |version: &str| {
+            format!(
+                r#"{{"exported_at":"2026-01-01T00:00Z","plugin_version":{version},"stats":{{{}}}}}"#,
+                attack("1", "0")
+            )
+        };
+        let version = |text: &str| {
+            parse(&with_version(text)).map(|export| export.plugin_version().map(str::to_owned))
+        };
         assert_eq!(
-            parse(text).expect("valid").plugin_version(),
-            Some("9.9.9-future")
+            version(r#""9.9.9-future""#),
+            Ok(Some("9.9.9-future".to_owned()))
         );
-        let without = r#"{"exported_at":"2026-01-01T00:00Z","stats":{"Attack":{"real_level":1,"experience":0}}}"#;
-        assert_eq!(parse(without).expect("valid").plugin_version(), None);
+        assert_eq!(version(r#""""#), Ok(Some(String::new())));
+        assert_eq!(version("null"), Ok(None));
+        let without = format!(
+            r#"{{"exported_at":"2026-01-01T00:00Z","stats":{{{}}}}}"#,
+            attack("1", "0")
+        );
+        assert_eq!(parse(&without).expect("valid").plugin_version(), None);
+    }
+
+    #[test]
+    fn a_plugin_version_that_is_not_a_string_is_rejected() {
+        for bad in ["6", "1.5", "true", "[]", r#"{"v":1}"#] {
+            let text = format!(
+                r#"{{"exported_at":"2026-01-01T00:00Z","plugin_version":{bad},"stats":{{{}}}}}"#,
+                attack("1", "0")
+            );
+            assert_eq!(
+                parse(&text).unwrap_err(),
+                CharacterParseError::InvalidPluginVersion,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_skills_are_still_held_to_the_level_and_experience_bounds() {
+        for (level, experience) in [("0", "0"), ("100", "0"), ("50", "200000001")] {
+            let body =
+                format!(r#""Necromancy":{{"real_level":{level},"experience":{experience}}}"#);
+            assert!(
+                matches!(
+                    parse(&document("2026-01-01T00:00Z", &body)).unwrap_err(),
+                    CharacterParseError::InvalidSkillValue {
+                        problem: SkillValueProblem::OutOfRange,
+                        ..
+                    }
+                ),
+                "{level} {experience}"
+            );
+        }
     }
 
     #[test]
