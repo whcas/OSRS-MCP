@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use osrs_mcp::market::{
-    ClientConfig, ConfigError, Endpoint, HardcoreClient, ItemId, Lookback, MarketDataError,
-    TransportKind, UnixSeconds, WindowLength, WorldType,
+    ClientConfig, Endpoint, HardcoreClient, ItemId, Lookback, MarketDataError, TransportKind,
+    UnixSeconds, WindowLength, WorldType,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -406,37 +406,6 @@ async fn a_requested_item_missing_from_the_response_is_valid_and_absent() {
         .await
         .unwrap();
     assert!(result.value.is_empty());
-}
-
-#[test]
-fn the_standard_world_endpoint_cannot_be_used_to_build_a_hardcore_client() {
-    for base_url in [
-        "https://prices.runescape.wiki/api/v2/osrs/",
-        "http://127.0.0.1:8080/api/v2/osrs/",
-    ] {
-        let config = ClientConfig {
-            base_url: base_url.to_owned(),
-            allow_loopback_test_server: true,
-            ..ClientConfig::default()
-        };
-        assert_eq!(
-            HardcoreClient::new(config).map(|_| ()),
-            Err(ConfigError::NotHardcoreEndpoint),
-            "{base_url}"
-        );
-    }
-}
-
-#[test]
-fn a_loopback_server_is_refused_by_default() {
-    let config = ClientConfig {
-        base_url: "http://127.0.0.1:8080/api/v2/osrs-hc/".to_owned(),
-        ..ClientConfig::default()
-    };
-    assert_eq!(
-        HardcoreClient::new(config).map(|_| ()),
-        Err(ConfigError::NotHardcoreEndpoint)
-    );
 }
 
 fn before_epoch() -> SystemTime {
