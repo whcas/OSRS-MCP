@@ -43,6 +43,19 @@ fn main() -> ExitCode {
     }
 }
 
+/// Renders an error followed by its chain of causes, for example
+/// `MCP initialization failed: connection closed`.
+fn describe(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        text.push_str(": ");
+        text.push_str(&next.to_string());
+        cause = next.source();
+    }
+    text
+}
+
 /// Maps command-line arguments (excluding the program name) to a command.
 fn parse_command(args: impl IntoIterator<Item = OsString>) -> Command {
     let mut args = args.into_iter();
@@ -70,7 +83,7 @@ fn run_server(info: BuildInfo) -> ExitCode {
         .and_then(|runtime| {
             runtime
                 .block_on(osrs_mcp::mcp::serve_stdio())
-                .map_err(|error| error.to_string())
+                .map_err(|error| describe(&error))
         });
 
     match result {
@@ -117,6 +130,13 @@ mod tests {
     fn version_flags_select_version() {
         assert_eq!(parse(&["--version"]), Command::Version);
         assert_eq!(parse(&["-V"]), Command::Version);
+    }
+
+    #[test]
+    fn describe_appends_the_cause_of_a_serve_error() {
+        let error =
+            osrs_mcp::mcp::ServeError::Initialize(Box::new(io::Error::other("pipe closed")));
+        assert_eq!(describe(&error), "MCP initialization failed: pipe closed");
     }
 
     #[test]

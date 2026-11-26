@@ -107,5 +107,44 @@ async fn unknown_tool_is_a_protocol_error() {
         .call_tool(CallToolRequestParams::new("no_such_tool"))
         .await;
 
-    assert!(outcome.is_err(), "unknown tools must not succeed");
+    // The SDK reports an unknown tool as JSON-RPC "invalid params" (-32602).
+    match outcome {
+        Err(rmcp::ServiceError::McpError(error)) => {
+            assert_eq!(error.code.0, -32602, "error: {error:?}");
+        }
+        other => panic!("expected a JSON-RPC protocol error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn server_info_capabilities_match_the_initialize_response() {
+    let (client, _server) = connect().await;
+    let declared = client
+        .peer_info()
+        .expect("server info after handshake")
+        .capabilities
+        .clone();
+
+    let result = call_server_info(&client).await;
+    let structured = result.structured_content.expect("structured content");
+    let reported: Vec<&str> = structured["capabilities"]
+        .as_array()
+        .expect("capabilities array")
+        .iter()
+        .map(|name| name.as_str().expect("capability name"))
+        .collect();
+
+    for (name, is_declared) in [
+        ("tools", declared.tools.is_some()),
+        ("resources", declared.resources.is_some()),
+        ("prompts", declared.prompts.is_some()),
+        ("completions", declared.completions.is_some()),
+        ("logging", declared.logging.is_some()),
+    ] {
+        assert_eq!(
+            reported.contains(&name),
+            is_declared,
+            "capability {name}: tool reported {reported:?}"
+        );
+    }
 }
