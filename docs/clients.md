@@ -133,6 +133,22 @@ These test the protocol, not any specific client:
   with exactly the JSON it returned" --allowedTools mcp__osrs__server_info`
   returned `{"capabilities":["tools"],"name":"osrs-mcp","read_only":true,"version":"0.1.0"}`
   after a tool-using turn (3 turns, no error).
+- Direct tool-call evidence: a second run with `--output-format stream-json
+  --verbose` (project `.mcp.json` via `--mcp-config`) produced these events,
+  sanitised (paths and session ids removed). The model's final answer is not
+  the evidence; the `tool_use` and `tool_result` events are:
+
+  ```text
+  system/init   mcp_servers: [{"name":"osrs","status":"connected"}]  claude_code_version 2.1.332
+  tool_use      name: mcp__osrs__server_info   input: {}
+  tool_result   "{\"capabilities\":[\"tools\"],\"name\":\"osrs-mcp\",\"read_only\":true,\"version\":\"0.1.0\"}"   (no error)
+  assistant     "0.1.0"
+  result        num_turns 3, is_error false
+  ```
+
+  (An earlier `ToolSearch` call that loaded the deferred tool is omitted.)
+  The result string comes from the server, not from the prompt or README: the
+  prompt asked only for the `version` field.
 - Project-scoped `.mcp.json` (shown above) was also exercised: `claude mcp list`
   reported "Pending approval" until approved, which is expected, and the same
   call via `--mcp-config` returned version `0.1.0`.
