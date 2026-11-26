@@ -1,0 +1,17 @@
+[package]
+name = "osrs-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+description = "Read-only advisory MCP server for Old School RuneScape Hardcore worlds"
+repository = "https://github.com/whcas/OSRS-MCP"
+publish = false
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
