@@ -4,7 +4,6 @@
 //! `src/main.rs` is a thin adapter over this crate.
 
 pub mod mcp;
-pub mod mcp;
 pub mod profit;
 pub mod runelite;
 
