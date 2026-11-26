@@ -11,7 +11,7 @@ use osrs_mcp::market::{
     WorldType,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 const LATEST: &str = include_str!("fixtures/hardcore_ge/latest.json");
 const FIVE_MINUTE: &str = include_str!("fixtures/hardcore_ge/five_minute.json");
@@ -71,31 +71,41 @@ async fn serve(replies: Vec<Reply>) -> Mock {
     let log = Arc::clone(&seen);
     tokio::spawn(async move {
         for index in 0.. {
-            let Ok((mut stream, _)) = listener.accept().await else {
+            let Ok((stream, _)) = listener.accept().await else {
                 return;
             };
             let reply = replies[index.min(replies.len() - 1)].clone();
-            let log = Arc::clone(&log);
-            tokio::spawn(async move {
-                let mut head = Vec::new();
-                let mut buffer = [0_u8; 1024];
-                while !head.windows(4).any(|window| window == b"\r\n\r\n") {
-                    match stream.read(&mut buffer).await {
-                        Ok(0) | Err(_) => return,
-                        Ok(read) => head.extend_from_slice(&buffer[..read]),
-                    }
-                }
-                log.lock()
-                    .unwrap()
-                    .push(String::from_utf8_lossy(&head).into_owned());
-                let _ = write_reply(&mut stream, reply).await;
-            });
+            tokio::spawn(handle_connection(stream, reply, Arc::clone(&log)));
         }
     });
     Mock { base_url, seen }
 }
 
-async fn write_reply(stream: &mut tokio::net::TcpStream, reply: Reply) -> std::io::Result<()> {
+/// Serves one connection: records the request head, then sends `reply`. A
+/// connection that closes before sending a full head is dropped unanswered.
+async fn handle_connection(mut stream: TcpStream, reply: Reply, log: Seen) {
+    let Some(head) = read_request_head(&mut stream).await else {
+        return;
+    };
+    log.lock().unwrap().push(head);
+    let _ = write_reply(&mut stream, reply).await;
+}
+
+/// Reads up to the blank line that ends an HTTP request head, or `None` if the
+/// connection closes or fails first.
+async fn read_request_head(stream: &mut TcpStream) -> Option<String> {
+    let mut head = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+        match stream.read(&mut buffer).await {
+            Ok(0) | Err(_) => return None,
+            Ok(read) => head.extend_from_slice(&buffer[..read]),
+        }
+    }
+    Some(String::from_utf8_lossy(&head).into_owned())
+}
+
+async fn write_reply(stream: &mut TcpStream, reply: Reply) -> std::io::Result<()> {
     match reply {
         Reply::Respond { status, body } => {
             let head = format!(
