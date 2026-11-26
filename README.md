@@ -26,11 +26,48 @@ Provide LLM clients with reliable, efficient access to game knowledge, live Hard
 
 ## Development status
 
-Early development. A minimal Rust binary and CI exist; no server or application features are implemented yet. Initial milestones are Rust tooling and CI, a minimal MCP server, verification in Claude and ChatGPT, and investigation of Wiki acquisition and licensing. SQLite and local section-based retrieval are proposed directions, not settled implementation requirements.
+Early development. A minimal read-only MCP server (`osrs-mcp serve`, stdio transport) exposes a single `server_info` tool; no OSRS functionality is implemented yet. Initial milestones are Rust tooling and CI, a minimal MCP server, verification in Claude and ChatGPT, and investigation of Wiki acquisition and licensing. SQLite and local section-based retrieval are proposed directions, not settled implementation requirements.
 
 ## Contributing
 
 Read [AGENTS.md](AGENTS.md) for engineering conventions. Use a scoped [GitHub issue](https://github.com/whcas/OSRS-MCP/issues), a short-lived branch and a pull request into `main`. Human review and passing applicable checks are expected before merging. Record significant architectural decisions under [docs/adr](docs/adr/).
+
+## Running the MCP server
+
+Build the binary (the pinned toolchain is installed by rustup automatically):
+
+```sh
+cargo build --release --locked
+```
+
+The server speaks MCP over stdio: an MCP client launches the process and exchanges newline-delimited JSON-RPC on stdin and stdout. Only protocol messages are written to stdout; diagnostics go to stderr.
+
+```sh
+target/release/osrs-mcp serve     # serve MCP on stdio until stdin closes
+target/release/osrs-mcp --version # print the version
+```
+
+Run it from source without a release build with `cargo run --locked -- serve`. (Cargo's own build output goes to stderr, so stdout stays clean.)
+
+### Quick manual check without an MCP client
+
+This pipes an initialise handshake and a `server_info` call into the server and prints the responses:
+
+```sh
+{ printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"manual","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"server_info","arguments":{}}}'
+  sleep 1; } | target/release/osrs-mcp serve
+```
+
+The `sleep` keeps stdin open long enough for the server to answer before it sees end of input. The second response contains `"structuredContent":{"capabilities":["tools"],"name":"osrs-mcp","read_only":true,"version":"<version>"}`.
+
+### Tools
+
+| Tool | Description |
+| --- | --- |
+| `server_info` | Read-only. Returns the server name, version, read-only guarantee and MCP capabilities. Uses no external data. |
 
 ## Development
 
