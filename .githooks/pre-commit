@@ -12,11 +12,16 @@ root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root" || exit 1
 
 if ! git diff --cached --check; then
-    echo "pre-commit: staged changes contain whitespace errors (listed above)." >&2
+    echo "pre-commit: staged changes have whitespace errors or could not be read (see above); commit aborted." >&2
     exit 1
 fi
 
-if [ -n "$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs')" ]; then
+if ! staged_rust=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs'); then
+    echo "pre-commit: could not list staged files (git diff failed); commit aborted." >&2
+    exit 1
+fi
+
+if [ -n "$staged_rust" ]; then
     if ! scripts/check.sh fmt; then
         echo "pre-commit: Rust formatting check failed; run \`cargo fmt --all\` and re-stage." >&2
         exit 1

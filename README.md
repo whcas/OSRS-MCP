@@ -78,7 +78,7 @@ Prerequisites: a POSIX shell, Git and the pinned Rust toolchain (see "Toolchain 
 Hooks check your working tree, not a snapshot of what will be committed or pushed:
 
 - The whitespace check in `pre-commit` reads the staged changes only. The formatting check reads working-tree files, so with partial staging (`git add -p`) it can pass or fail on content that is not in the commit.
-- `pre-push` tests the working tree. If it has uncommitted changes, or the pushed ref is not the checked-out commit, the hook prints a warning because the result may not describe what is pushed.
+- `pre-push` tests the working tree. If it has uncommitted changes, untracked files, or the pushed ref is not the checked-out commit, the hook prints a warning because the result may not describe what is pushed.
 - Neither hook replaces CI, which checks the pushed commits and remains authoritative, as do branch protections.
 
 Bypass a hook once with `git commit --no-verify` or `git push --no-verify`. The hooks are tested in throwaway repositories by `tests/git_hooks.rs`, which runs under `cargo test`.

@@ -4,15 +4,16 @@
 # because it needs network access.
 #
 # The checks run on the working tree, not on the commits being pushed. A warning
-# is printed when the two can differ. Bypass once with `git push --no-verify`.
-# CI remains authoritative.
+# is printed when the two can differ: uncommitted changes to tracked files, or
+# untracked files (a new module, say, can change what builds). The hook fails
+# rather than guess if the working tree state cannot be read. Bypass once with
+# `git push --no-verify`. CI remains authoritative.
 
 root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root" || exit 1
 
-zero=0000000000000000000000000000000000000000
 pushing=false
-differs=false
+other_ref=false
 head=$(git rev-parse HEAD 2>/dev/null)
 
 # stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
@@ -22,17 +23,26 @@ while read -r _local_ref local_sha _remote_ref _remote_sha; do
         *) continue ;; # all zeros: a deletion, nothing to verify
     esac
     pushing=true
-    [ "$local_sha" = "$head" ] || differs=true
+    [ "$local_sha" = "$head" ] || other_ref=true
 done
 
 $pushing || exit 0
 
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-    differs=true
+if ! status=$(git status --porcelain); then
+    echo "pre-push: could not read the working tree state (git status failed); push aborted." >&2
+    exit 1
 fi
-if $differs; then
-    echo "pre-push: warning: checks run on the working tree, which has uncommitted changes" >&2
-    echo "pre-push: or is not the commit being pushed; CI verifies the pushed commit." >&2
+tracked=$(printf '%s\n' "$status" | grep -v -e '^??' -e '^$')
+untracked=$(printf '%s\n' "$status" | grep -e '^??')
+
+if [ -n "$tracked" ]; then
+    echo "pre-push: warning: uncommitted changes to tracked files; checks may not match the pushed commit." >&2
+fi
+if [ -n "$untracked" ]; then
+    echo "pre-push: warning: untracked files are present; checks include them but CI will not see them." >&2
+fi
+if $other_ref; then
+    echo "pre-push: warning: a pushed ref is not the checked-out commit; checks may not match it." >&2
 fi
 
 if ! scripts/check.sh; then
