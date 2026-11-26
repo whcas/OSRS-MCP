@@ -49,6 +49,8 @@ target/release/osrs-mcp --version # print the version
 
 Run it from source without a release build with `cargo run --locked -- serve`. (Cargo's own build output goes to stderr, so stdout stays clean.)
 
+Client setup and verification status: [docs/clients.md](docs/clients.md).
+
 ### Quick manual check without an MCP client
 
 This pipes an initialise handshake and a `server_info` call into the server and prints the responses:
