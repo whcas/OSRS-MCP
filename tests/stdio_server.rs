@@ -203,3 +203,36 @@ fn diagnostics_go_to_stderr_and_never_to_stdout() {
     );
     assert!(remaining.is_empty(), "unexpected stdout: {remaining:?}");
 }
+
+#[test]
+fn malformed_input_is_skipped_without_polluting_stdout() {
+    let mut server = ServerProcess::start();
+
+    // Not JSON at all, before the handshake, then a truncated object after it.
+    server
+        .stdin
+        .as_mut()
+        .expect("stdin open")
+        .write_all(b"this is not json\n")
+        .expect("write garbage");
+    server.send(&initialize_request());
+    assert_eq!(server.receive()["id"], 1);
+    server.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+    server
+        .stdin
+        .as_mut()
+        .expect("stdin open")
+        .write_all(b"{\"broken\":\n")
+        .expect("write truncated JSON");
+    server.send(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+    let tools = server.receive();
+    assert_eq!(tools["id"], 2, "server should keep serving: {tools}");
+    assert_eq!(tools["result"]["tools"][0]["name"], "server_info");
+
+    let (status, leftover, stderr) = server.close_and_wait();
+    assert!(
+        status.success(),
+        "exit status: {status:?}, stderr: {stderr}"
+    );
+    assert!(leftover.is_empty(), "unexpected stdout: {leftover:?}");
+}
