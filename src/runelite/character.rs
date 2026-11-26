@@ -354,3 +354,303 @@ impl<'de> Deserialize<'de> for SkillEntries {
         deserializer.deserialize_map(EntriesVisitor)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal valid document with one `Attack` skill, with `stats_body`
+    /// spliced in so each test states only what it varies.
+    fn document(exported_at: &str, stats_body: &str) -> String {
+        format!(r#"{{"exported_at":"{exported_at}","stats":{{{stats_body}}}}}"#)
+    }
+
+    fn attack(real_level: &str, experience: &str) -> String {
+        format!(r#""Attack":{{"real_level":{real_level},"experience":{experience}}}"#)
+    }
+
+    fn parse(text: &str) -> Result<CharacterExport, CharacterParseError> {
+        parse_character_export(text.as_bytes())
+    }
+
+    #[test]
+    fn unknown_fields_are_ignored_at_every_level() {
+        let text = r#"{"exported_at":"2026-01-01T00:00Z","future":{"a":1},
+            "stats":{"Attack":{"real_level":1,"experience":0,"boosted_level":1,"extra":[1,2]}}}"#;
+        let export = parse(text).expect("unknown fields are ignored");
+        assert_eq!(export.skills().len(), 1);
+    }
+
+    #[test]
+    fn a_bad_timestamp_in_a_document_is_a_typed_error() {
+        let result = parse(&document("not a time", &attack("1", "0")));
+        assert_eq!(result.unwrap_err(), CharacterParseError::InvalidTimestamp);
+    }
+
+    #[test]
+    fn missing_required_fields_are_typed_errors() {
+        assert_eq!(
+            parse(r#"{"stats":{"Attack":{"real_level":1,"experience":0}}}"#).unwrap_err(),
+            CharacterParseError::MissingField {
+                field: "exported_at"
+            }
+        );
+        assert_eq!(
+            parse(r#"{"exported_at":"2026-01-01T00:00Z"}"#).unwrap_err(),
+            CharacterParseError::MissingField { field: "stats" }
+        );
+    }
+
+    #[test]
+    fn empty_stats_are_rejected() {
+        assert_eq!(
+            parse(&document("2026-01-01T00:00Z", "")).unwrap_err(),
+            CharacterParseError::NoSkills
+        );
+    }
+
+    #[test]
+    fn a_skill_missing_a_required_value_names_the_skill_and_field() {
+        let text = document("2026-01-01T00:00Z", r#""Attack":{"experience":0}"#);
+        assert_eq!(
+            parse(&text).unwrap_err(),
+            CharacterParseError::MissingSkillField {
+                skill: "Attack".to_owned(),
+                field: "real_level"
+            }
+        );
+        let text = document("2026-01-01T00:00Z", r#""Attack":{"real_level":1}"#);
+        assert_eq!(
+            parse(&text).unwrap_err(),
+            CharacterParseError::MissingSkillField {
+                skill: "Attack".to_owned(),
+                field: "experience"
+            }
+        );
+    }
+
+    #[test]
+    fn values_that_are_not_integers_are_rejected() {
+        for bad in ["1.5", "\"1\"", "null", "true", "-1", "1e2"] {
+            let err = parse(&document("2026-01-01T00:00Z", &attack(bad, "0"))).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    CharacterParseError::InvalidSkillValue {
+                        field: "real_level",
+                        problem: SkillValueProblem::NotAnInteger,
+                        ..
+                    }
+                ),
+                "{bad}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn level_and_experience_boundaries_are_enforced() {
+        let ok = |level: &str, xp: &str| parse(&document("2026-01-01T00:00Z", &attack(level, xp)));
+        assert!(ok("1", "0").is_ok());
+        assert!(ok("99", "200000000").is_ok());
+
+        assert!(matches!(
+            ok("0", "0").unwrap_err(),
+            CharacterParseError::InvalidSkillValue {
+                field: "real_level",
+                problem: SkillValueProblem::OutOfRange,
+                ..
+            }
+        ));
+        assert!(matches!(
+            ok("100", "0").unwrap_err(),
+            CharacterParseError::InvalidSkillValue {
+                field: "real_level",
+                problem: SkillValueProblem::OutOfRange,
+                ..
+            }
+        ));
+        assert!(matches!(
+            ok("99", "200000001").unwrap_err(),
+            CharacterParseError::InvalidSkillValue {
+                field: "experience",
+                problem: SkillValueProblem::OutOfRange,
+                ..
+            }
+        ));
+        // Larger than any integer type the importer uses: still a range error.
+        assert!(matches!(
+            ok("99", "99999999999999999999999").unwrap_err(),
+            CharacterParseError::InvalidSkillValue {
+                field: "experience",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_level_that_disagrees_with_experience_is_a_warning_not_an_error() {
+        let text = document("2026-01-01T00:00Z", &attack("50", "83"));
+        let export = parse(&text).expect("inconsistency is not fatal");
+        assert_eq!(export.skill(&Skill::Attack).map(|s| s.real_level), Some(50));
+        assert_eq!(
+            export.warnings(),
+            [Warning::LevelExperienceMismatch {
+                skill: Skill::Attack,
+                recorded_level: 50,
+                implied_level: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn experience_boundaries_imply_the_right_level_without_warnings() {
+        for (level, xp) in [
+            (1, 0),
+            (1, 82),
+            (2, 83),
+            (97, 11_805_605),
+            (98, 11_805_606),
+            (98, 13_034_430),
+            (99, 13_034_431),
+            (99, 200_000_000),
+        ] {
+            let text = document(
+                "2026-01-01T00:00Z",
+                &attack(&level.to_string(), &xp.to_string()),
+            );
+            let export = parse(&text).expect("valid");
+            assert!(
+                export.warnings().is_empty(),
+                "level {level} xp {xp}: {:?}",
+                export.warnings()
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_skills_are_kept_with_a_warning_and_not_checked_against_the_table() {
+        let text = document(
+            "2026-01-01T00:00Z",
+            r#""Necromancy":{"real_level":50,"experience":83}"#,
+        );
+        let export = parse(&text).expect("unknown skills do not fail the import");
+        let name = Skill::Unknown("Necromancy".to_owned());
+        assert_eq!(export.skill(&name).map(|s| s.real_level), Some(50));
+        assert_eq!(
+            export.warnings(),
+            [Warning::UnknownSkill {
+                name: "Necromancy".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn skills_are_returned_in_the_order_the_file_lists_them() {
+        let body = format!(
+            "{},{},{}",
+            r#""Mining":{"real_level":1,"experience":0}"#,
+            r#""Attack":{"real_level":1,"experience":0}"#,
+            r#""Sailing":{"real_level":1,"experience":0}"#,
+        );
+        let export = parse(&document("2026-01-01T00:00Z", &body)).expect("valid");
+        let order: Vec<_> = export
+            .skills()
+            .iter()
+            .map(|record| record.skill.name())
+            .collect();
+        assert_eq!(order, ["Mining", "Attack", "Sailing"]);
+    }
+
+    #[test]
+    fn a_skill_listed_twice_is_an_error() {
+        let body = format!("{},{}", attack("1", "0"), attack("2", "83"));
+        assert_eq!(
+            parse(&document("2026-01-01T00:00Z", &body)).unwrap_err(),
+            CharacterParseError::DuplicateSkill {
+                name: "Attack".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn input_that_is_not_an_object_is_an_unexpected_shape() {
+        // A derived `Deserialize` would accept the array forms by position.
+        for text in [
+            "[]",
+            r#"["2026-01-01T00:00Z",null,{"Attack":{"real_level":1,"experience":0}}]"#,
+            "42",
+            "null",
+            r#""text""#,
+            r#"{"exported_at":"2026-01-01T00:00Z","stats":[]}"#,
+            r#"{"exported_at":"2026-01-01T00:00Z","stats":null}"#,
+            r#"{"exported_at":"2026-01-01T00:00Z","stats":{"Attack":[1,0]}}"#,
+            r#"{"exported_at":"2026-01-01T00:00Z","stats":{"Attack":5}}"#,
+        ] {
+            assert_eq!(
+                parse(text).unwrap_err(),
+                CharacterParseError::UnexpectedShape,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_string_timestamp_is_an_invalid_timestamp_and_bad_bytes_do_not_panic() {
+        assert_eq!(
+            parse(r#"{"exported_at":5,"stats":{}}"#).unwrap_err(),
+            CharacterParseError::InvalidTimestamp
+        );
+        assert!(parse_character_export(&[0xff, 0xfe]).is_err());
+    }
+
+    #[test]
+    fn the_plugin_version_is_recorded_as_text_and_any_value_is_accepted() {
+        let text = r#"{"exported_at":"2026-01-01T00:00Z","plugin_version":"9.9.9-future",
+            "stats":{"Attack":{"real_level":1,"experience":0}}}"#;
+        assert_eq!(
+            parse(text).expect("valid").plugin_version(),
+            Some("9.9.9-future")
+        );
+        let without = r#"{"exported_at":"2026-01-01T00:00Z","stats":{"Attack":{"real_level":1,"experience":0}}}"#;
+        assert_eq!(parse(without).expect("valid").plugin_version(), None);
+    }
+
+    #[test]
+    fn error_messages_never_echo_input_values() {
+        let err = parse(&document(
+            "2026-01-01T00:00Z",
+            &attack("\"secret-value\"", "0"),
+        ))
+        .unwrap_err();
+        assert!(!err.to_string().contains("secret-value"));
+        assert!(!format!("{err:?}").contains("secret-value"));
+    }
+
+    #[test]
+    fn empty_and_invalid_input_are_classified_separately() {
+        assert_eq!(parse("").unwrap_err(), CharacterParseError::Truncated);
+
+        let err = parse("{ nope }").unwrap_err();
+        assert_eq!(err, CharacterParseError::InvalidJson);
+        assert!(!err.is_transient());
+    }
+
+    #[test]
+    fn json_errors_convert_by_category_without_keeping_their_text() {
+        let eof = serde_json::from_str::<Value>("{").unwrap_err();
+        let syntax = serde_json::from_str::<Value>("{ nope }").unwrap_err();
+        let data = serde_json::from_str::<u8>(r#""secret-value""#).unwrap_err();
+        assert_eq!(
+            CharacterParseError::from(eof),
+            CharacterParseError::Truncated
+        );
+        assert_eq!(
+            CharacterParseError::from(syntax),
+            CharacterParseError::InvalidJson
+        );
+        let converted = CharacterParseError::from(data);
+        assert_eq!(converted, CharacterParseError::UnexpectedShape);
+        assert!(!converted.to_string().contains("secret-value"));
+        assert!(!format!("{converted:?}").contains("secret-value"));
+    }
+}
