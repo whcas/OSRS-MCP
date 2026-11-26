@@ -62,7 +62,7 @@
 //! - ROI is `None` when the acquisition cost is zero, since it is undefined
 //!   rather than zero.
 
-pub use crate::domain::{Gp, Quantity};
+use crate::domain::{Gp, Quantity};
 
 /// Divisor converting basis points to a fraction.
 const BASIS_POINTS_PER_UNIT: i128 = 10_000;
