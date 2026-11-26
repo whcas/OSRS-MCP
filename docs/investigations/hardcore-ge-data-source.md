@@ -58,9 +58,9 @@ OSRS_MCP_LIVE_API=1 cargo test --locked --test live_hardcore_api -- --ignored --
 ```
 
 - `tests/live_hardcore_api.rs` is `#[ignore]`d and also needs `OSRS_MCP_LIVE_API=1`, so it cannot run by accident.
-- It uses `ClientConfig::default()` (the project User-Agent `osrs-mcp/<Cargo version> (+https://github.com/whcas/OSRS-MCP)`, a 30 s timeout and an 8 MiB body cap), makes five sequential requests two seconds apart (`mapping`, `latest?id=4151`, `5m`, `1h`, `timeseries` 24h) and never retries.
+- It uses `ClientConfig::default()` (the project User-Agent `osrs-mcp/<Cargo version> (+https://github.com/whcas/OSRS-MCP)`, a 30 s timeout and an 8 MiB body cap), makes six sequential requests two seconds apart (`mapping`, `latest?id=4151`, `5m`, `5m` scoped to the start it just returned, `1h`, `timeseries` 24h) and never retries.
 - It asserts structural facts only (Hardcore provenance, source URL, boundaries of the `5m` and `1h` timestamps, the sample item present, a positive timestep) and prints counts, never bodies. It writes nothing to disk.
-- Last run 2026-11-26: passed (mapping 4682 items, `5m` 322, `1h` 1058, `timeseries` 68 points).
+- Last run 2026-11-26, with the object-only parser: passed (mapping 4682 items, `5m` 450, scoped `5m` 450, `1h` 1182, `timeseries` 65 points).
 - A failure is a result: it means the real API or the client's expectations drifted. Record it, compare with this document, and fix the client or the document; do not retry in a loop. A non-200 status (for example 403 for a blocked User-Agent, or 429) is likewise a result.
 
 The first live check used a throwaway Python script (`scripts/verify_hardcore_api.py`, since retired, see the git history of PR #24) that also printed response headers and compared one standard-world request. Its findings are recorded below. If header-level checks are needed again, expose them from the client instead of keeping a parallel script. This procedure does not settle whether volume counts items or transactions, or the side semantics of the aggregates; those need a source statement or a controlled observation.
@@ -89,7 +89,8 @@ Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one e
 | `timeseries` points are contiguous at `timestep` | **Not so, as observed.** The header said 300, but the first two sampled points are 600 s apart (1795602300 then 1795602900) while the last two are 300 s apart, so steps with no trades appear to be omitted (inferred). Clients must not assume a gap-free series. The documentation also says the timestep is not guaranteed |
 | Averages have at most two decimals | Stated by the documentation; the observed values (e.g. `227.22`) are consistent. Over-precise values are rejected rather than rounded by the client |
 | `1h` top-level `timestamp`, `mapping` entry count and optional fields, response headers, User-Agent acceptance | **Observed** from the maintainer's Mac on 2026-11-26 with the project User-Agent; see "Live verification result" below |
-| Error bodies (4xx/5xx), rate-limit headers | **Not observed**: every request returned 200 and no `X-RateLimit-*` or `Retry-After` header was present |
+| Window timestamp handling | **Observed (2026-11-26, 4 requests)**: `5m?timestamp=` with a 300 s-aligned value is echoed back exactly in the response `timestamp`. An unaligned value, a value one day in the future, and `1` each returned **HTTP 400** with a 46-byte JSON body of the form `{"error": ...}`. The client therefore requires a scoped response's timestamp to equal the requested one |
+| Rate-limit headers, 429/5xx bodies | **Not observed**: no `X-RateLimit-*` or `Retry-After` header was present, and no 429 or 5xx was provoked |
 | Whether Hardcore trades are taxed | **Unknown**; not in the API |
 
 ## Live verification result (2026-11-26, 11:34 UTC)
@@ -190,7 +191,7 @@ The client in `src/market/` follows the sketch above with these differences:
 - The mapping response is parsed with only `id` and `name` required; the live check showed `limit`, `value`, `highalch` and `lowalch` can be absent, so the parser's choice is confirmed.
 - Fixtures in `tests/fixtures/hardcore_ge/` are partly synthetic; see the README there.
 - The client rejects any base URL other than the real `osrs-hc` endpoint or a loopback test server, records the exact source URL in provenance, validates scoped responses against the request, and reports observations dated in the future as such. These follow review feedback and are covered by regression tests.
-- The client was checked against the live API on 2026-11-26 with the opt-in test in "Local verification procedure". Non-200 behaviour is still unobserved.
+- The client was checked against the live API on 2026-11-26 with the opt-in test in "Local verification procedure". Only HTTP 400 for bad window timestamps has been observed among error responses; 403, 429 and 5xx remain unobserved.
 
 ## Trade-offs and recommendation
 
@@ -202,6 +203,6 @@ The client in `src/market/` follows the sketch above with these differences:
 
 1. ~~Hardcore GE tax~~: decided in #14 as 0% for Hardcore; not derivable from the API.
 2. ~~Exact `1h` top-level `timestamp` and optional `mapping` fields~~: answered by the live verification result.
-3. ~~Real response headers~~: observed. Rate-limit behaviour under load and non-200 responses remain unobserved.
+3. ~~Real response headers~~: observed. Rate-limit behaviour under load, and 403/429/5xx responses, remain unobserved; 400 for bad window timestamps is observed.
 4. Whether `highPriceVolume` and `lowPriceVolume` count items or transactions.
 5. Whether the aggregate endpoints' "high" and "low" sides match `latest`'s instant-buy and instant-sell sides.

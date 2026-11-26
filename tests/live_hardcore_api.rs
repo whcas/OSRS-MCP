@@ -13,7 +13,7 @@
 //! ```
 //!
 //! It uses the client's default configuration (the project `User-Agent`, the
-//! real `osrs-hc` endpoint), one request per endpoint, sequentially, with a
+//! real `osrs-hc` endpoint), one request per endpoint plus one scoped `5m` window, sequentially, with a
 //! pause between requests and no retries. It asserts only structural facts
 //! (never specific prices), and prints counts rather than response data. No
 //! response body is written to disk.
@@ -90,6 +90,15 @@ async fn the_real_hardcore_api_matches_the_typed_client() {
     let start = five_minute.value.starts_at.expect("5m window has a start");
     assert_eq!(start.0 % 300, 0, "5m start is not on a 300 s boundary");
     println!("5m: {} items", five_minute.value.items.len());
+    pause().await;
+
+    // A window requested by its own start must come back with that start.
+    let scoped = client
+        .window(WindowLength::FiveMinutes, Some(start))
+        .await
+        .expect("scoped 5m window");
+    assert_eq!(scoped.value.starts_at, Some(start));
+    println!("scoped 5m: {} items", scoped.value.items.len());
     pause().await;
 
     let one_hour = client
