@@ -145,17 +145,50 @@ fn page<'a>(dataset: &'a Dataset, title: &str) -> Option<&'a Page> {
 }
 
 #[test]
-fn header_identifies_format_and_dataset() {
+fn header_is_complete_for_format_version_1() {
     let dataset = load();
 
     assert_eq!(dataset.format_version, 1);
-    assert_eq!(dataset.id, "osrs-wiki-retrieval");
+    assert_filled("dataset_id", &dataset.id);
     assert_filled("dataset_version", &dataset.version);
-    assert_filled("created", &dataset.created);
     assert!(dataset.source.site.starts_with("https://"));
-    assert_filled("observed_on", &dataset.source.observed_on);
     assert_filled("method", &dataset.source.method);
     assert_filled("licence_note", &dataset.source.licence_note);
+}
+
+/// A date as the README documents it: `YYYY-MM-DD`. The shape is enough here;
+/// whether the date exists on the calendar does not matter to the format.
+fn is_dated(text: &str) -> bool {
+    text.len() == 10
+        && text.char_indices().all(|(index, character)| match index {
+            4 | 7 => character == '-',
+            _ => character.is_ascii_digit(),
+        })
+}
+
+#[test]
+fn dates_have_the_documented_shape() {
+    let dataset = load();
+
+    assert!(is_dated(&dataset.created), "created is not YYYY-MM-DD");
+    assert!(
+        is_dated(&dataset.source.observed_on),
+        "observed_on is not YYYY-MM-DD"
+    );
+    for page in &dataset.pages {
+        if let Some(modified) = &page.last_modified {
+            assert!(is_dated(modified), "{} last_modified", page.title);
+        }
+    }
+}
+
+/// Scope check for the initial 0.1.0 benchmark only: its identity and the two
+/// relevance grades it defines. Another dataset may declare other grades.
+#[test]
+fn initial_benchmark_declares_its_identity_and_grades() {
+    let dataset = load();
+
+    assert_eq!(dataset.id, "osrs-wiki-retrieval");
     assert_eq!(
         dataset
             .grades
@@ -278,7 +311,12 @@ fn covers(outer: Option<&str>, inner: Option<&str>) -> bool {
     match (outer, inner) {
         (None, _) => true,
         (Some(_), None) => false,
-        (Some(outer), Some(inner)) => inner == outer || inner.starts_with(&format!("{outer} > ")),
+        (Some(outer), Some(inner)) => {
+            inner == outer
+                || inner
+                    .strip_prefix(outer)
+                    .is_some_and(|rest| rest.starts_with(" > "))
+        }
     }
 }
 
@@ -417,7 +455,7 @@ fn retired_ids_are_explained_and_never_reused() {
 }
 
 #[test]
-fn pages_are_unique_and_revisions_are_consistent() {
+fn recorded_pages_have_unique_titles_and_unique_sections() {
     let dataset = load();
     let mut titles = HashSet::new();
 
@@ -432,6 +470,16 @@ fn pages_are_unique_and_revisions_are_consistent() {
             "{} has no sections",
             page.title
         );
+        let unique: HashSet<_> = page.observed_sections.iter().collect();
+        assert_eq!(unique.len(), page.observed_sections.len(), "{}", page.title);
+    }
+}
+
+#[test]
+fn page_revision_fields_agree_with_each_other() {
+    let dataset = load();
+
+    for page in &dataset.pages {
         assert_eq!(
             page.oldid.is_some(),
             page.last_modified.is_some(),
@@ -444,13 +492,19 @@ fn pages_are_unique_and_revisions_are_consistent() {
             "{} revision basis does not match its revision data",
             page.title
         );
+    }
+}
+
+#[test]
+fn incomplete_heading_lists_are_explained() {
+    let dataset = load();
+
+    for page in &dataset.pages {
         assert!(
             page.headings_complete || page.note.as_deref().is_some_and(|n| !n.trim().is_empty()),
             "{} has an incomplete heading list and needs a note",
             page.title
         );
-        let unique: HashSet<_> = page.observed_sections.iter().collect();
-        assert_eq!(unique.len(), page.observed_sections.len(), "{}", page.title);
     }
 }
 
