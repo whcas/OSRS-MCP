@@ -21,6 +21,16 @@
 //! - Return on investment is reported in basis points (1 bp = 0.01%) and
 //!   truncated toward zero.
 //!
+//! # Hardcore worlds
+//!
+//! The maintainer specifies a 0% Grand Exchange tax on Hardcore Main Worlds
+//! (issue #14, clarification of 2026-11-26): callers pricing Hardcore trades
+//! pass [`FeePolicy::NoFees`], an explicit assertion rather than a default.
+//! This is a maintainer-provided game rule, not independently verified against
+//! live trades, and this module deliberately contains no world-specific rules
+//! so that it stays correct if that changes. Standard-world tax is never
+//! applied implicitly.
+//!
 //! # Scope of a fee policy
 //!
 //! One [`FeePolicy`] applies to every output line of a [`Transaction`]. Outputs
@@ -408,6 +418,17 @@ mod tests {
         assert_eq!(outcome.fees, Some(gp(2_200)));
         assert_eq!(outcome.net_profit, Some(gp(7_800)));
         assert_eq!(outcome.roi.map(BasisPoints::get), Some(780));
+    }
+
+    #[test]
+    fn worked_hardcore_trade_with_an_explicit_zero_fee_policy() {
+        // Maintainer rule: no GE tax on Hardcore Main Worlds, asserted by the
+        // caller with `NoFees`. Buy 100 at 1,000; sell 100 at 1,100.
+        // Net = 110,000 - 100,000 = 10,000, which is 10% = 1,000 bp.
+        let outcome = evaluate(&trade(1_000, 1_100, 100, FeePolicy::NoFees)).unwrap();
+        assert_eq!(outcome.fees, Some(gp(0)));
+        assert_eq!(outcome.net_profit, Some(gp(10_000)));
+        assert_eq!(outcome.roi.map(BasisPoints::get), Some(1_000));
     }
 
     #[test]
