@@ -76,6 +76,28 @@ impl OsrsMcpServer {
     }
 }
 
+/// The MCP capabilities this server advertises. This is the single source for
+/// both the `initialize` response and the `server_info` tool, so they cannot
+/// drift apart.
+fn server_capabilities() -> ServerCapabilities {
+    ServerCapabilities::builder().enable_tools().build()
+}
+
+/// Names of the capability groups declared in `capabilities`.
+fn capability_names(capabilities: &ServerCapabilities) -> Vec<String> {
+    [
+        ("tools", capabilities.tools.is_some()),
+        ("resources", capabilities.resources.is_some()),
+        ("prompts", capabilities.prompts.is_some()),
+        ("completions", capabilities.completions.is_some()),
+        ("logging", capabilities.logging.is_some()),
+    ]
+    .into_iter()
+    .filter(|&(_, declared)| declared)
+    .map(|(name, _)| name.to_owned())
+    .collect()
+}
+
 /// Builds the `server_info` payload from compile-time package metadata.
 fn server_info_output() -> ServerInfoOutput {
     let info = build_info();
@@ -83,7 +105,7 @@ fn server_info_output() -> ServerInfoOutput {
         name: info.name.to_owned(),
         version: info.version.to_owned(),
         read_only: true,
-        capabilities: vec!["tools".to_owned()],
+        capabilities: capability_names(&server_capabilities()),
     }
 }
 
@@ -97,7 +119,7 @@ fn server_info_output() -> ServerInfoOutput {
 impl ServerHandler for OsrsMcpServer {
     fn get_info(&self) -> ServerConfig {
         let info = build_info();
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(server_capabilities())
             .with_server_info(Implementation::new(info.name, info.version))
             .with_instructions(INSTRUCTIONS)
     }
@@ -117,25 +139,35 @@ pub async fn serve_stdio() -> Result<(), ServeError> {
     serve(OsrsMcpServer::new(), transport).await
 }
 
-/// Failure while running the MCP server.
+/// A boxed underlying error, kept so callers can walk the source chain.
+type Cause = Box<dyn std::error::Error + Send + Sync>;
+
+/// Failure while running the MCP server. The underlying cause is available
+/// through [`std::error::Error::source`].
 #[derive(Debug)]
 pub enum ServeError {
     /// The MCP initialization handshake failed.
-    Initialize(String),
+    Initialize(Cause),
     /// The connection ended abnormally after initialization.
-    Connection(String),
+    Connection(Cause),
 }
 
 impl std::fmt::Display for ServeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Initialize(reason) => write!(f, "MCP initialization failed: {reason}"),
-            Self::Connection(reason) => write!(f, "MCP connection failed: {reason}"),
-        }
+        f.write_str(match self {
+            Self::Initialize(_) => "MCP initialization failed",
+            Self::Connection(_) => "MCP connection failed",
+        })
     }
 }
 
-impl std::error::Error for ServeError {}
+impl std::error::Error for ServeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Initialize(cause) | Self::Connection(cause) => Some(cause.as_ref()),
+        }
+    }
+}
 
 async fn serve<T, E, A>(server: OsrsMcpServer, transport: T) -> Result<(), ServeError>
 where
@@ -145,10 +177,10 @@ where
     let running = server
         .serve(transport)
         .await
-        .map_err(|error: ServerInitializeError| ServeError::Initialize(error.to_string()))?;
+        .map_err(|error: ServerInitializeError| ServeError::Initialize(Box::new(error)))?;
     running
         .waiting()
         .await
         .map(|_| ())
-        .map_err(|error| ServeError::Connection(error.to_string()))
+        .map_err(|error| ServeError::Connection(Box::new(error)))
 }
