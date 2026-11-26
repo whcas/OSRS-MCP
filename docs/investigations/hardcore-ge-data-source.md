@@ -92,7 +92,7 @@ Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one e
 | Window timestamp handling | **Observed (2026-11-26, 4 requests)**: `5m?timestamp=` with a 300 s-aligned value is echoed back exactly in the response `timestamp`. An unaligned value, a value one day in the future, and `1` each returned **HTTP 400** with a 46-byte JSON body of the form `{"error": ...}`. The client therefore requires a scoped response's timestamp to equal the requested one |
 | Bulk `latest` (no `id`) | **Observed (2026-11-26, one request, real Rust client)**: 2868 items; every entry carried all four keys (`high`, `highTime`, `low`, `lowTime`), so the client's required-field rule holds. 502 entries were one-sided and none had neither side, so a never-traded item is absent from the bulk response rather than present with four nulls |
 | Rate-limit headers, 429/5xx bodies | **Not observed**: no `X-RateLimit-*` or `Retry-After` header was present, and no 429 or 5xx was provoked |
-| Whether Hardcore trades are taxed | **Unknown**; not in the API |
+| Hardcore GE fee | **Maintainer-observed, not from the API:** 0% in the in-game Convenience Fees UI on 2026-11-26 (#14, #20). The API says nothing about fees, so this is a limit of what the API tells us, not an unknown fee. Not independently verified against live trades |
 
 ## Live verification result (2026-11-26, 11:34 UTC)
 
@@ -115,17 +115,17 @@ Newly observed and relevant to #18:
 - In the Hardcore `latest` sample, the instant-sell `low` (6,528,000) was **higher** than the instant-buy `high` (6,500,000), and their timestamps were about 26 minutes apart. A crossed pair is therefore possible and must not be treated as an error or silently corrected. Margin calculations should surface it.
 - `highTime` was 2318 s old and `lowTime` 787 s old when sampled; standard-world times were 91 s and 39 s. Staleness is normal for Hardcore.
 
-Still **inferred or unknown**, not settled by this run: item versus transaction volume, whether the aggregate `High`/`Low` sides match `latest`'s sides, Hardcore GE tax (resolved by decision in #14, not by the API), and non-200 behaviour.
+Still **inferred or unknown**, not settled by this run: item versus transaction volume, whether the aggregate `High`/`Low` sides match `latest`'s sides, the Hardcore GE fee (maintainer-observed at 0% in the in-game Convenience Fees UI on 2026-11-26, #14 and #20; the API itself is silent), and non-200 behaviour.
 
 ## Semantics
 
-- **Buy/sell:** `high` is the latest *instant-buy* price and `low` the latest *instant-sell* price. For `5m`, `1h` and `timeseries`, `avgHighPrice`/`highPriceVolume` and `avgLowPrice`/`lowPriceVolume` are the corresponding averages and trade counts. The documentation states this mapping only for `latest`; applying it to the aggregates is an inference.
+- **Buy/sell:** `high` is the latest *instant-buy* price and `low` the latest *instant-sell* price. For `5m`, `1h` and `timeseries`, `avgHighPrice`/`highPriceVolume` and `avgLowPrice`/`lowPriceVolume` are the corresponding averages and reported volumes. The documentation states this mapping only for `latest`; applying it to the aggregates is an inference.
 - **Timestamps:** `highTime`/`lowTime` are Unix seconds of the trade. In `5m`/`1h` the timestamp is the **start** of the averaging block (so the block is only complete 5 minutes or 1 hour later). `timeseries` `timestep` is not guaranteed and may change.
-- **Volume windows:** 5 minutes, 1 hour, and per-step counts in `timeseries`. No other window is documented. Volumes are trade counts per side, not GP value.
+- **Volume windows:** 5 minutes, 1 hour, and per-step counts in `timeseries`. No other window is documented. Volumes are the reported counts per side, not GP value; whether a count is items or transactions is unknown (see "Verified versus inferred").
 - **Numbers:** prices can exceed `i32`. Averages can have up to two decimal places (e.g. `227.22`).
 - **Missing values:** items never traded are absent from `latest`. A side never observed is `null` (for `latest`, both price and time). Aggregates use `null` average with volume `0`. Absent and `null` are different from a price of zero and must not be coerced.
 - **Freshness:** not conveyed by the API beyond the timestamps. Hardcore items can have a last trade days old (`highTime` for item 4151 was about 12 days earlier than the standard sample), so staleness must be computed by the client from timestamps against an explicit threshold.
-- **Fees/GE tax:** not documented by this API. The maintainer decision recorded in #14 is a 0% Hardcore GE tax, kept as an explicit configurable input rather than inferred from the API.
+- **Fees/GE tax:** not documented by this API. The maintainer observed a 0% Hardcore fee in the in-game Convenience Fees UI on 2026-11-26 (#14, #20); it is kept as an explicit configurable input rather than inferred from the API, and has not been verified against live trades.
 
 ## Usage policy
 
@@ -197,12 +197,12 @@ The client in `src/market/` follows the sketch above with these differences:
 ## Trade-offs and recommendation
 
 - **For `osrs-hc`:** the only documented Hardcore source, same schema as standard, free and unauthenticated, cached, and explicitly supported by the wiki.
-- **Against:** sparse and stale items; one-sided prices; averages with decimals; the timestep and v1 may change; no Hardcore tax information; coverage depends on Jagex-provided data since 2026-09-30.
+- **Against:** sparse and stale items; one-sided prices; averages with decimals; the timestep and v1 may change; no fee information in the API (the maintainer observed 0% in game); coverage depends on Jagex-provided data since 2026-09-30.
 - **Recommendation:** adopt `api/v2/osrs-hc`, build #18 against the schema above after a maintainer re-verifies the samples with the real User-Agent, treat staleness and one-sided prices as normal conditions, and keep tax/fee policy as a separate explicit input.
 
 ## Open questions
 
-1. ~~Hardcore GE tax~~: decided in #14 as 0% for Hardcore; not derivable from the API.
+1. ~~Hardcore GE tax~~: maintainer-observed 0% in the in-game Convenience Fees UI on 2026-11-26 (#14, #20); not derivable from the API.
 2. ~~Exact `1h` top-level `timestamp` and optional `mapping` fields~~: answered by the live verification result.
 3. ~~Real response headers~~: observed. Rate-limit behaviour under load, and 403/429/5xx responses, remain unobserved; 400 for bad window timestamps is observed.
 4. Whether `highPriceVolume` and `lowPriceVolume` count items or transactions.
