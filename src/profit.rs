@@ -21,6 +21,13 @@
 //! - Return on investment is reported in basis points (1 bp = 0.01%) and
 //!   truncated toward zero.
 //!
+//! # Scope of a fee policy
+//!
+//! One [`FeePolicy`] applies to every output line of a [`Transaction`]. Outputs
+//! with different fee treatment (some exempt, some taxed) are not expressible
+//! in a single transaction: split them into separate transactions and combine
+//! the results in the caller.
+//!
 //! # Missing data versus zero
 //!
 //! - A missing unit price is [`ProfitError::MissingPrice`], never treated as
@@ -469,6 +476,28 @@ mod tests {
         // 2% of 1,000 = 20, capped to 5 per unit, times 4 units.
         let outcome = evaluate(&trade(0, 1_000, 4, capped)).unwrap();
         assert_eq!(outcome.fees, Some(gp(20)));
+    }
+
+    #[test]
+    fn a_cap_above_the_computed_fee_does_not_bind() {
+        let capped = FeePolicy::PercentOfSale {
+            rate_basis_points: 200,
+            cap_per_unit: Some(gp(1_000)),
+        };
+        // 2% of 1,000 = 20 per unit, well under the cap of 1,000.
+        let outcome = evaluate(&trade(0, 1_000, 4, capped)).unwrap();
+        assert_eq!(outcome.fees, Some(gp(80)));
+    }
+
+    #[test]
+    fn a_zero_cap_removes_the_fee_without_making_it_unknown() {
+        let zero_cap = FeePolicy::PercentOfSale {
+            rate_basis_points: 200,
+            cap_per_unit: Some(gp(0)),
+        };
+        let outcome = evaluate(&trade(0, 1_000, 4, zero_cap)).unwrap();
+        assert_eq!(outcome.fees, Some(gp(0)));
+        assert_eq!(outcome.net_profit, Some(gp(4_000)));
     }
 
     #[test]
