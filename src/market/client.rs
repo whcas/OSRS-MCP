@@ -120,7 +120,7 @@ pub enum ConfigError {
 #[derive(Debug, Clone)]
 pub struct HardcoreClient {
     http: Client,
-    base_url: Url,
+    endpoints: EndpointUrls,
     max_response_bytes: usize,
     clock: fn() -> SystemTime,
 }
@@ -137,6 +137,7 @@ impl HardcoreClient {
             return Err(ConfigError::BlankUserAgent);
         }
         let base_url = parse_base_url(&config.base_url, config.allow_loopback_test_server)?;
+        let endpoints = EndpointUrls::new(&base_url)?;
         let http = Client::builder()
             .user_agent(config.user_agent)
             .connect_timeout(config.connect_timeout)
@@ -147,7 +148,7 @@ impl HardcoreClient {
             .map_err(|_| ConfigError::HttpClient)?;
         Ok(Self {
             http,
-            base_url,
+            endpoints,
             max_response_bytes: config.max_response_bytes,
             clock: config.clock,
         })
@@ -269,10 +270,7 @@ impl HardcoreClient {
     }
 
     fn endpoint_url(&self, endpoint: Endpoint, query: &[(&str, String)]) -> Url {
-        let mut url = self.base_url.clone();
-        // The base always ends with a slash (see `parse_base_url`), so appending
-        // the segment cannot replace the world's path segment.
-        url.set_path(&format!("{}{}", self.base_url.path(), endpoint.path()));
+        let mut url = self.endpoints.get(endpoint).clone();
         if !query.is_empty() {
             url.query_pairs_mut().extend_pairs(query);
         }
@@ -318,6 +316,44 @@ fn transport_error(endpoint: Endpoint, error: &reqwest::Error) -> MarketDataErro
     MarketDataError::Transport {
         endpoint,
         kind: transport_kind(error),
+    }
+}
+
+/// The URL of every endpoint, joined onto the validated base URL once at
+/// construction, so that a request never assembles a URL from strings and a
+/// base that cannot take an endpoint path is rejected up front.
+#[derive(Debug, Clone)]
+struct EndpointUrls {
+    mapping: Url,
+    latest: Url,
+    five_minute: Url,
+    one_hour: Url,
+    timeseries: Url,
+}
+
+impl EndpointUrls {
+    fn new(base: &Url) -> Result<Self, ConfigError> {
+        let join = |endpoint: Endpoint| {
+            base.join(endpoint.path())
+                .map_err(|_| ConfigError::InvalidBaseUrl)
+        };
+        Ok(Self {
+            mapping: join(Endpoint::Mapping)?,
+            latest: join(Endpoint::Latest)?,
+            five_minute: join(Endpoint::FiveMinute)?,
+            one_hour: join(Endpoint::OneHour)?,
+            timeseries: join(Endpoint::Timeseries)?,
+        })
+    }
+
+    const fn get(&self, endpoint: Endpoint) -> &Url {
+        match endpoint {
+            Endpoint::Mapping => &self.mapping,
+            Endpoint::Latest => &self.latest,
+            Endpoint::FiveMinute => &self.five_minute,
+            Endpoint::OneHour => &self.one_hour,
+            Endpoint::Timeseries => &self.timeseries,
+        }
     }
 }
 
@@ -396,6 +432,17 @@ mod tests {
                 .as_str(),
             "http://127.0.0.1:9/api/osrs-hc/5m?timestamp=60"
         );
+        for (endpoint, expected) in [
+            (Endpoint::Mapping, "mapping"),
+            (Endpoint::Latest, "latest"),
+            (Endpoint::OneHour, "1h"),
+            (Endpoint::Timeseries, "timeseries"),
+        ] {
+            assert_eq!(
+                client.endpoint_url(endpoint, &[]).as_str(),
+                format!("http://127.0.0.1:9/api/osrs-hc/{expected}")
+            );
+        }
     }
 
     #[test]
