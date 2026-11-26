@@ -118,7 +118,7 @@ These test the protocol, not any specific client:
 
 | Client | Status | Evidence |
 | --- | --- | --- |
-| Claude Code | Verified in a Linux cloud container (not on the maintainer's workstation) | See below |
+| Claude Code | Verified in a Linux cloud container and on the maintainer's Apple Silicon Mac (headless, temporary MCP config) | See below |
 | Claude Desktop | **Not verified** | Blocked: needs the maintainer's desktop app. See "Pending" below. |
 
 #### Claude Code (verified, 2026-11-26)
@@ -156,6 +156,26 @@ These test the protocol, not any specific client:
   interactive sessions prompt for permission instead. The interactive `/mcp`
   screen was not exercised, and this was not run on the maintainer's own
   machine or Claude Code installation.
+
+#### Claude Code on the maintainer's Mac (verified, 2026-11-26)
+
+- Client: Claude Code 2.1.326, macOS on Apple Silicon (arm64), headless `claude -p`, model `haiku`.
+- Server: `osrs-mcp` 0.1.0, `cargo build --release --locked` from the head of the #3 branch (`3e394e3`), run over stdio.
+- Registration: **no user or project configuration was modified.** The server was supplied with
+  `--mcp-config <temporary file> --strict-mcp-config`, so `claude mcp add` was not run on this machine.
+  `claude mcp add` / `.mcp.json` registration was therefore not re-verified locally; it was verified in the cloud container above.
+- Command: `claude -p "Call the osrs MCP server's server_info tool and reply with exactly the JSON it returned" --mcp-config <file> --strict-mcp-config --allowedTools mcp__osrs__server_info --output-format stream-json --verbose`
+- Sanitised events (paths removed):
+
+  ```text
+  system/init   mcp_servers: [{"name":"osrs","status":"connected","source":"dynamic"}]  claude_code_version 2.1.326
+  tool_use      name: ToolSearch  (loads the deferred tool)
+  tool_use      name: mcp__osrs__server_info   input: {}
+  tool_result   "{\"capabilities\":[\"tools\"],\"name\":\"osrs-mcp\",\"read_only\":true,\"version\":\"0.1.0\"}"   (no error)
+  result        num_turns 3, is_error false
+  ```
+
+- Not exercised: the interactive `/mcp` screen and interactive approval prompts.
 
 #### Claude Desktop (pending maintainer action)
 
