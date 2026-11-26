@@ -1,0 +1,6 @@
+# Exact stable toolchain used locally and in CI. Bump deliberately in its own PR;
+# see "Toolchain policy" in README.md.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

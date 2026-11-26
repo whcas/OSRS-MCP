@@ -26,13 +26,59 @@ Provide LLM clients with reliable, efficient access to game knowledge, live Hard
 
 ## Development status
 
-Early development. No server or application features are implemented yet. Initial milestones are Rust tooling and CI, a minimal MCP server, verification in Claude and ChatGPT, and investigation of Wiki acquisition and licensing. SQLite and local section-based retrieval are proposed directions, not settled implementation requirements.
+Early development. A minimal Rust binary and CI exist; no server or application features are implemented yet. Initial milestones are Rust tooling and CI, a minimal MCP server, verification in Claude and ChatGPT, and investigation of Wiki acquisition and licensing. SQLite and local section-based retrieval are proposed directions, not settled implementation requirements.
 
 ## Contributing
 
 Read [AGENTS.md](AGENTS.md) for engineering conventions. Use a scoped [GitHub issue](https://github.com/whcas/OSRS-MCP/issues), a short-lived branch and a pull request into `main`. Human review and passing applicable checks are expected before merging. Record significant architectural decisions under [docs/adr](docs/adr/).
 
-Build and test commands will be documented once the Rust project and CI are introduced.
+## Development
+
+### Toolchain policy
+
+The Rust toolchain is pinned to an exact stable release in [`rust-toolchain.toml`](rust-toolchain.toml) (currently 1.100.0), and `rust-version` in `Cargo.toml` matches it. rustup installs the pinned version automatically, so local and CI results agree. Bump the pin deliberately in its own pull request, usually to the latest stable every six-week release or when a dependency needs it. Dependabot does not update this file.
+
+### Checks
+
+Run all local checks with:
+
+```sh
+scripts/check.sh
+```
+
+This runs, in order, `cargo fmt --all --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo build --locked --all-targets` and `cargo test --locked`. Each step can also run alone with `scripts/check.sh fmt`, `clippy` or `test`. CI calls the same script, so local and CI commands cannot drift apart.
+
+The dependency audit runs separately because it needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) and network access to the RustSec advisory database. Install the same version CI uses (set in `.github/workflows/ci.yml`):
+
+```sh
+cargo install --locked --version 0.20.2 cargo-deny
+scripts/check.sh audit
+```
+
+It checks advisories, banned crates and crate sources, configured in [`deny.toml`](deny.toml). Licence checks are not enabled yet because the project licence has not been decided.
+
+### Lints
+
+`Cargo.toml` sets a strict baseline, and CI denies all warnings:
+
+- **Clippy groups:** `all`, `pedantic` and `nursery` are enabled.
+- **Restriction lints:** the restriction group is not enabled wholesale. A selected set targets panics in production code (`unwrap_used`, `expect_used`, `panic`, `todo`, `unimplemented`, `unreachable` and related lints), direct printing (`print_stdout`, `print_stderr`, `dbg_macro`), keeping stdout free for protocol output, and suppressions that don't say why (`allow_attributes`, `allow_attributes_without_reason`).
+- **rustc lints:** unsafe code is forbidden. Several extra lints are on, including `missing_docs`, `missing_debug_implementations`, `unreachable_pub` and `unused_qualifications`.
+
+`clippy.toml` allows panics, unwraps and printing in tests only. When a lint must be silenced elsewhere, use a narrowly scoped `#[expect(lint, reason = "...")]` rather than `#[allow]`. Cargo metadata lints wait until the package metadata and licence are settled (#8).
+
+### CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pull requests, pushes to `main`, a weekly schedule and manual dispatch. It uses read-only repository permissions and needs no secrets. Scheduled runs execute only the dependency audit.
+
+| Check name | Runs | Required on `main` |
+| --- | --- | --- |
+| `Format` | `scripts/check.sh fmt` | Yes |
+| `Clippy` | `scripts/check.sh clippy` | Yes |
+| `Test` | `scripts/check.sh test` | Yes |
+| `Dependency audit` | `scripts/check.sh audit` | Not yet; a new advisory can fail it on an unrelated change |
+
+The maintainer configures required checks in the branch ruleset; contributors and agents do not change repository protections.
 
 ## Licensing and data
 

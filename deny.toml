@@ -1,0 +1,25 @@
+# cargo-deny configuration. Run with `scripts/check.sh audit`.
+#
+# Licence checks are not enabled yet because the project licence has not been
+# decided; they are tracked in a follow-up issue.
+
+[graph]
+all-features = true
+
+[advisories]
+# Fail on any RustSec vulnerability; also report unmaintained crates and
+# yanked versions. Add exceptions here only with a reason and a linked issue.
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
