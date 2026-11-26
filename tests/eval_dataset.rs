@@ -226,7 +226,7 @@ fn query_ids_and_texts_are_unique_and_well_formed() {
 }
 
 #[test]
-fn judgements_reference_recorded_pages_and_observed_sections() {
+fn judgements_and_recorded_pages_reference_each_other() {
     let dataset = load();
 
     for query in &dataset.queries {
@@ -242,9 +242,30 @@ fn judgements_reference_recorded_pages_and_observed_sections() {
                     recorded.title
                 );
             }
+        }
+    }
+    for page in &dataset.pages {
+        assert!(
+            dataset
+                .queries
+                .iter()
+                .flat_map(|q| &q.judgements)
+                .any(|j| j.page == page.title),
+            "page {} is recorded but never judged",
+            page.title
+        );
+    }
+}
+
+#[test]
+fn judgement_grades_are_declared_in_the_dataset() {
+    let dataset = load();
+
+    for query in &dataset.queries {
+        for judgement in &query.judgements {
             assert!(
-                matches!(judgement.grade, 1 | 2),
-                "{} has grade {}",
+                dataset.grades.contains_key(&judgement.grade.to_string()),
+                "{} has undeclared grade {}",
                 query.id,
                 judgement.grade
             );
@@ -430,17 +451,6 @@ fn pages_are_unique_and_revisions_are_consistent() {
         );
         let unique: HashSet<_> = page.observed_sections.iter().collect();
         assert_eq!(unique.len(), page.observed_sections.len(), "{}", page.title);
-    }
-    for page in &dataset.pages {
-        assert!(
-            dataset
-                .queries
-                .iter()
-                .flat_map(|q| &q.judgements)
-                .any(|j| j.page == page.title),
-            "page {} is recorded but never judged",
-            page.title
-        );
     }
 }
 
