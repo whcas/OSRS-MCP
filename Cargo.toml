@@ -1,0 +1,62 @@
+[package]
+name = "osrs-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+description = "Read-only advisory MCP server for Old School RuneScape Hardcore worlds"
+repository = "https://github.com/whcas/OSRS-MCP"
+publish = false
+
+[dependencies]
+
+# Lint baseline: see "Lints" in README.md. CI runs Clippy with `-D warnings`,
+# so every `warn` below fails the build. Group levels use priority -1 so the
+# individual settings after them take precedence.
+
+[lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+redundant_lifetimes = "warn"
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unit_bindings = "warn"
+unnameable_types = "warn"
+unreachable_pub = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Selected restriction lints. The restriction group as a whole is not enabled:
+# many of its lints contradict each other or idiomatic Rust.
+# No panics in production paths (allowed in tests via clippy.toml).
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+get_unwrap = "warn"
+unwrap_in_result = "warn"
+panic_in_result_fn = "warn"
+exit = "warn"
+# Keep stdout reserved for program output and, later, MCP protocol traffic:
+# all output must go through explicit writers.
+print_stdout = "warn"
+print_stderr = "warn"
+dbg_macro = "warn"
+# Suppressions must say why, and use `#[expect]` so stale ones are reported.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+# Other inexpensive safeguards.
+mem_forget = "warn"
+rc_mutex = "warn"
+str_to_string = "warn"
+undocumented_unsafe_blocks = "warn"
