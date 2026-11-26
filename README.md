@@ -82,4 +82,4 @@ The maintainer configures required checks in the branch ruleset; contributors an
 
 ## Licensing and data
 
-Application licensing is not yet established. Third-party game data and Wiki content have separate terms; investigate and document those before acquiring or redistributing substantial datasets. This is an unofficial project, not affiliated with Jagex or the OSRS Wiki.
+Application licensing is not yet established. Third-party game data and Wiki content have separate terms; investigate and document those before acquiring or redistributing substantial datasets. See the [Wiki acquisition and licensing investigation](docs/investigations/wiki-acquisition.md) for current findings and open questions. This is an unofficial project, not affiliated with Jagex or the OSRS Wiki.
