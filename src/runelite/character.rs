@@ -111,9 +111,11 @@ impl fmt::Display for SkillValueProblem {
     }
 }
 
-/// Why `character.json` could not be imported. No variant carries an input
-/// value other than a skill name, which is cut to [`MAX_NAME_CHARS`]
-/// characters so that a hostile file cannot produce an unbounded diagnostic.
+/// Why `character.json` could not be imported.
+///
+/// No variant carries an input value other than a skill name, which is cut to
+/// [`MAX_NAME_CHARS`] characters so that a hostile file cannot produce an
+/// unbounded diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CharacterParseError {
     /// The input ended inside a JSON value, or was empty. The plugin does not
