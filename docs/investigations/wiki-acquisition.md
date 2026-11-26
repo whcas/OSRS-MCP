@@ -1,6 +1,6 @@
 # Investigation: OSRS Wiki acquisition and licensing
 
-- Status: Proposed. Awaiting maintainer decision and an unresolved permission question (see [Open questions](#open-questions)).
+- Status: Proposed. The maintainer has deferred the consent request and any Wiki acquisition (2026-11-26); the permission questions remain open (see [Open questions](#open-questions)) and nothing should be fetched in bulk until they are answered.
 - Date: 2026-11-26
 - Related issues: #6 (this investigation), #16 (retrieval evaluation dataset), #8 (project licence)
 
