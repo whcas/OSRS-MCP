@@ -24,7 +24,11 @@
 //! # Missing data versus zero
 //!
 //! - A missing unit price is [`ProfitError::MissingPrice`], never treated as
-//!   zero. A free input is expressed by an explicit price of `Gp::new(0)`.
+//!   zero. Valuing an input at zero is a decision the caller makes with an
+//!   explicit price of `Gp::new(0)`. This module does not infer it: an item the
+//!   player already owns still has an opportunity cost (what it could be sold
+//!   for), which differs from cash spent, and which one to use is the caller's
+//!   choice.
 //! - An unknown fee policy ([`FeePolicy::Unknown`]) leaves fees, net profit and
 //!   ROI as `None` in the [`Outcome`], while gross figures remain available.
 //!   [`FeePolicy::NoFees`] is a deliberate assertion that no fee applies.
@@ -401,7 +405,9 @@ mod tests {
 
     #[test]
     fn worked_multi_input_recipe() {
-        // Inputs: 2 x A at 300, 1 x B at 250, 1 x C owned (explicit price 0).
+        // Inputs: 2 x A at 300, 1 x B at 250, 1 x C valued at 0 by the
+        // caller (for example, an item already owned whose opportunity cost the
+        // caller chooses to ignore).
         // Cost = 600 + 250 + 0 = 850.
         // Outputs: 3 x D at 400 (1,200) and 1 x E at 99 (99) = 1,299.
         // Fees at 2% floored per unit: D 8 each = 24, E floor(1.98) = 1 -> 25.
