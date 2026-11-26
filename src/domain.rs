@@ -41,6 +41,8 @@
 //! or higher-precision timestamps keep their own representation and convert
 //! with [`TryFrom`].
 
+use std::num::NonZeroU64;
+
 /// A signed amount of coins (GP), such as a profit, loss, cost or fee.
 ///
 /// Signed so that losses are representable. For the price of one item use
@@ -106,8 +108,11 @@ pub struct AveragePrice {
 }
 
 /// A strictly positive item count.
+///
+/// The invariant is carried by the underlying [`NonZeroU64`], so a zero
+/// quantity cannot exist and `Option<Quantity>` costs no extra space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Quantity(u64);
+pub struct Quantity(NonZeroU64);
 
 impl Quantity {
     /// Creates a quantity, rejecting zero.
@@ -116,17 +121,16 @@ impl Quantity {
     ///
     /// Returns [`DomainError::ZeroQuantity`] if `count` is zero.
     pub const fn new(count: u64) -> Result<Self, DomainError> {
-        if count == 0 {
-            Err(DomainError::ZeroQuantity)
-        } else {
-            Ok(Self(count))
+        match NonZeroU64::new(count) {
+            Some(count) => Ok(Self(count)),
+            None => Err(DomainError::ZeroQuantity),
         }
     }
 
     /// Returns the count.
     #[must_use]
     pub const fn get(self) -> u64 {
-        self.0
+        self.0.get()
     }
 }
 
@@ -195,6 +199,12 @@ mod tests {
         assert_eq!(Quantity::new(0), Err(DomainError::ZeroQuantity));
         assert_eq!(Quantity::new(1).map(Quantity::get), Ok(1));
         assert_eq!(Quantity::new(u64::MAX).map(Quantity::get), Ok(u64::MAX));
+    }
+
+    #[test]
+    fn quantity_is_backed_by_a_non_zero_integer() {
+        // The niche means an absent quantity needs no extra space.
+        assert_eq!(size_of::<Option<Quantity>>(), size_of::<u64>());
     }
 
     #[test]
