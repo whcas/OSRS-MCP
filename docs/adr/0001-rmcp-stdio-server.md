@@ -42,12 +42,17 @@ protocol output isolated from diagnostics, and a first read-only tool.
 ## Consequences
 
 - rmcp 3.x pulls in `chrono`, which RustSec flags as unmaintained
-  (RUSTSEC-2026-0543, no safe upgrade). It cannot be disabled through features,
-  so the advisory is ignored in `deny.toml` with a reason and is tracked in #23.
+  (RUSTSEC-2026-0543, no safe upgrade). It cannot be disabled through features.
+  The maintainer accepted a narrowly scoped exception for exactly this advisory
+  (decision recorded in #23): `deny.toml` ignores it with a reason, and no other
+  advisory or dependency is covered. #23 stays open to track removal and to
+  review the exception on every rmcp upgrade.
 - rmcp's `#[tool_handler]` macro generates `async` trait methods without
   `.await`, which trips `clippy::unused_async_trait_impl`. A single narrow
   `#[expect]` with a reason covers the generated impl; the project's lint
-  baseline is otherwise unchanged.
+  baseline is otherwise unchanged. The maintainer accepted this expectation
+  and its scope on 2026-11-26; it becomes obsolete (and `#[expect]` will then
+  report it) if rmcp stops generating the lint.
 - Tools use the `#[tool]` macro; protocol types stay in `src/mcp.rs` so domain
   code does not depend on rmcp.
 - The dependency tree grows substantially; builds take longer.
