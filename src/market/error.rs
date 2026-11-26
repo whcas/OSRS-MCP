@@ -5,13 +5,16 @@ use thiserror::Error;
 use super::model::Endpoint;
 
 /// Broad class of transport failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TransportKind {
     /// The request or its connection timed out.
+    #[error("timeout")]
     Timeout,
     /// The connection could not be established.
+    #[error("connection failure")]
     Connect,
     /// Any other transport failure, such as a reset or a redirect refusal.
+    #[error("other transport failure")]
     Other,
 }
 
@@ -20,7 +23,7 @@ pub enum TransportKind {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum MarketDataError {
     /// The request did not complete.
-    #[error("request to Hardcore {} endpoint failed: {kind:?}", .endpoint.path())]
+    #[error("request to Hardcore {} endpoint failed: {kind}", .endpoint.path())]
     Transport {
         /// The endpoint requested.
         endpoint: Endpoint,
@@ -67,4 +70,46 @@ pub enum MarketDataError {
 /// The text appended to a malformed-response message for the offending field.
 fn field_note(field: Option<&str>) -> String {
     field.map_or_else(String::new, |field| format!(" (field `{field}`)"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn messages_are_written_out_and_do_not_depend_on_debug_formatting() {
+        let transport = |kind| MarketDataError::Transport {
+            endpoint: Endpoint::Latest,
+            kind,
+        };
+        assert_eq!(
+            transport(TransportKind::Timeout).to_string(),
+            "request to Hardcore latest endpoint failed: timeout"
+        );
+        assert_eq!(
+            transport(TransportKind::Connect).to_string(),
+            "request to Hardcore latest endpoint failed: connection failure"
+        );
+        assert_eq!(
+            transport(TransportKind::Other).to_string(),
+            "request to Hardcore latest endpoint failed: other transport failure"
+        );
+    }
+
+    #[test]
+    fn a_malformed_message_names_the_field_only_when_there_is_one() {
+        let malformed = |field| MarketDataError::Malformed {
+            endpoint: Endpoint::Mapping,
+            field,
+            reason: "required field is missing",
+        };
+        assert_eq!(
+            malformed(Some("id")).to_string(),
+            "Hardcore mapping response was malformed: required field is missing (field `id`)"
+        );
+        assert_eq!(
+            malformed(None).to_string(),
+            "Hardcore mapping response was malformed: required field is missing"
+        );
+    }
 }

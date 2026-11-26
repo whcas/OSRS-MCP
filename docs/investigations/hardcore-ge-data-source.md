@@ -69,8 +69,8 @@ Refreshing fixtures in `tests/fixtures/hardcore_ge/` (PR #29) is manual and smal
 
 ```sh
 UA="osrs-mcp/0.1.0 (+https://github.com/whcas/OSRS-MCP)"   # match Cargo.toml's version
-curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/latest?id=4151' | python3 -m json.tool
-curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/timeseries?id=4151&lookback=24h' | python3 -m json.tool
+curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/latest?id=4151'
+curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/timeseries?id=4151&lookback=24h'
 ```
 
 Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one entry with a null side, update the provenance table in the fixtures' README to say which are real captures and which synthetic, and commit only the trimmed files. Never commit a full response.

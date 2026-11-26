@@ -15,9 +15,10 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # side, the tool macros and the stdio transport are compiled; see ADR-0001.
 rmcp = { version = "3.11", default-features = false, features = ["server", "macros", "transport-io"] }
 serde = { version = "1", features = ["derive"] }
-# `raw_value` only adds the `RawValue` type, used to read number literals as
-# written. It changes no existing behaviour, unlike `arbitrary_precision`,
-# which is global and could alter other crates' JSON handling.
+# `raw_value` only adds the `RawValue` type: the market client reads average
+# prices from their exact text, and the RuneLite parser reads `stats` in file
+# order so that repeated skill names stay visible. It changes no existing
+# behaviour, unlike `arbitrary_precision`, which is global.
 serde_json = { version = "1", features = ["raw_value"] }
 # Derive for typed error enums (maintainer decision, #41). Compile-time only; the
 # locked version is already pulled in by rmcp.

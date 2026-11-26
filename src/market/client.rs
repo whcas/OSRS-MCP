@@ -3,6 +3,7 @@
 //! This is the only place in the crate that performs network I/O for market
 //! data. It fetches bytes, bounds them, and hands them to the pure parsers.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use reqwest::redirect::Policy;
@@ -171,7 +172,7 @@ impl HardcoreClient {
     pub async fn latest(
         &self,
         item: Option<ItemId>,
-    ) -> Result<Observed<std::collections::BTreeMap<ItemId, LatestPrices>>, MarketDataError> {
+    ) -> Result<Observed<BTreeMap<ItemId, LatestPrices>>, MarketDataError> {
         let query: Vec<(&str, String)> = item
             .map(|item| ("id", item.0.to_string()))
             .into_iter()
