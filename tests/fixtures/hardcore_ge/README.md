@@ -9,4 +9,4 @@ Small hand-trimmed bodies shaped like `https://prices.runescape.wiki/api/v2/osrs
 | `timeseries_24h.json` | Four data points copied from an observed response, with a synthetic two-sided point. Header fields are as observed. |
 | `mapping.json` | Synthetic, shaped from the documented field list. Observed bodies were truncated, so which fields may be absent is unverified. |
 
-Replace these with `curl -A '<our User-Agent>'` captures once a maintainer has verified the live API.
+These are not yet verified against the live API. The single verification and fixture-refresh procedure is "Local verification procedure" in `docs/investigations/hardcore-ge-data-source.md` (script: `scripts/verify_hardcore_api.py`); do not add a second one here. Replace these with trimmed real captures once a maintainer has run it.
