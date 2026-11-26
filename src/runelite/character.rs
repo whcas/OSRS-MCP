@@ -5,12 +5,13 @@
 //! `account_name` are never read or retained, a level that disagrees with
 //! experience is a warning, and error values never contain input values.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
+use std::ops::RangeInclusive;
 
-use serde::de::{self, IgnoredAny, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
 use serde_json::Value;
+use serde_json::value::RawValue;
 
 use super::experience::{MAX_EXPERIENCE, MAX_LEVEL, level_for_experience};
 use super::skill::Skill;
@@ -194,16 +195,33 @@ impl std::error::Error for CharacterParseError {}
 /// disagrees with experience is reported through
 /// [`CharacterExport::warnings`], not as an error.
 pub fn parse_character_export(bytes: &[u8]) -> Result<CharacterExport, CharacterParseError> {
-    let raw: RawCharacter =
+    // Fields stay as raw JSON text so that `stats` can be read in file order,
+    // which a `Value` map would not allow. Unknown fields are never examined.
+    let fields: BTreeMap<String, Box<RawValue>> =
         serde_json::from_slice(bytes).map_err(|error| classify_json_error(&error))?;
 
-    let exported_at = parse_exported_at(raw.exported_at)?;
-    let plugin_version = parse_plugin_version(raw.plugin_version)?;
-    let stats = raw
-        .stats
-        .0
+    let exported_at = match read_value(&fields, "exported_at")? {
+        None => {
+            return Err(CharacterParseError::MissingField {
+                field: "exported_at",
+            });
+        }
+        Some(Value::String(text)) => {
+            ExportedAt::parse(&text).ok_or(CharacterParseError::InvalidTimestamp)?
+        }
+        Some(_) => return Err(CharacterParseError::InvalidTimestamp),
+    };
+    let plugin_version = match read_value(&fields, "plugin_version")? {
+        None | Some(Value::Null) => None,
+        Some(Value::String(version)) => Some(version),
+        Some(_) => return Err(CharacterParseError::InvalidPluginVersion),
+    };
+    let stats = fields
+        .get("stats")
         .ok_or(CharacterParseError::MissingField { field: "stats" })?;
-    let (skills, warnings) = build_skills(stats.0)?;
+    let SkillEntries(entries) =
+        serde_json::from_str(stats.get()).map_err(|error| classify_json_error(&error))?;
+    let (skills, warnings) = read_skills(&entries)?;
 
     Ok(CharacterExport {
         exported_at,
@@ -211,6 +229,19 @@ pub fn parse_character_export(bytes: &[u8]) -> Result<CharacterExport, Character
         skills,
         warnings,
     })
+}
+
+/// A top-level field as a value, or `None` if the file has no such field. An
+/// explicit JSON `null` is `Some(Value::Null)`, not missing.
+fn read_value(
+    fields: &BTreeMap<String, Box<RawValue>>,
+    name: &str,
+) -> Result<Option<Value>, CharacterParseError> {
+    fields
+        .get(name)
+        .map(|raw| serde_json::from_str(raw.get()))
+        .transpose()
+        .map_err(|error| classify_json_error(&error))
 }
 
 fn classify_json_error(error: &serde_json::Error) -> CharacterParseError {
@@ -223,28 +254,8 @@ fn classify_json_error(error: &serde_json::Error) -> CharacterParseError {
     }
 }
 
-fn parse_exported_at(raw: Raw) -> Result<ExportedAt, CharacterParseError> {
-    match raw.0 {
-        None => Err(CharacterParseError::MissingField {
-            field: "exported_at",
-        }),
-        Some(Value::String(text)) => {
-            ExportedAt::parse(&text).ok_or(CharacterParseError::InvalidTimestamp)
-        }
-        Some(_) => Err(CharacterParseError::InvalidTimestamp),
-    }
-}
-
-fn parse_plugin_version(raw: Raw) -> Result<Option<String>, CharacterParseError> {
-    match raw.0 {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(version)) => Ok(Some(version)),
-        Some(_) => Err(CharacterParseError::InvalidPluginVersion),
-    }
-}
-
-fn build_skills(
-    entries: Vec<(String, RawSkill)>,
+fn read_skills(
+    entries: &[(String, Value)],
 ) -> Result<(Vec<SkillRecord>, Vec<Warning>), CharacterParseError> {
     if entries.is_empty() {
         return Err(CharacterParseError::NoSkills);
@@ -253,209 +264,104 @@ fn build_skills(
     let mut skills = Vec::with_capacity(entries.len());
     let mut warnings = Vec::new();
 
-    for (name, raw) in entries {
-        if !seen.insert(name.clone()) {
-            return Err(CharacterParseError::DuplicateSkill { name });
+    for (name, value) in entries {
+        if !seen.insert(name.as_str()) {
+            return Err(CharacterParseError::DuplicateSkill { name: name.clone() });
         }
-        let real_level = read_level(&name, raw.real_level)?;
-        let experience = read_experience(&name, raw.experience)?;
-        let skill = Skill::from_name(&name);
-        if let Some(warning) = check_skill(&skill, real_level, experience) {
-            warnings.push(warning);
-        }
-        skills.push(SkillRecord {
-            skill,
-            real_level,
-            experience,
-        });
+        let record = read_skill(name, value)?;
+        warnings.extend(warning_for(&record));
+        skills.push(record);
     }
     Ok((skills, warnings))
 }
 
-fn check_skill(skill: &Skill, real_level: u8, experience: u32) -> Option<Warning> {
-    if !skill.is_known() {
+fn read_skill(name: &str, value: &Value) -> Result<SkillRecord, CharacterParseError> {
+    let object = value
+        .as_object()
+        .ok_or(CharacterParseError::UnexpectedShape)?;
+    let real_level = read_integer(name, "real_level", object.get("real_level"), 1..=MAX_LEVEL)?;
+    let experience = read_integer(
+        name,
+        "experience",
+        object.get("experience"),
+        0..=MAX_EXPERIENCE,
+    )?;
+    Ok(SkillRecord {
+        skill: Skill::from_name(name),
+        real_level,
+        experience,
+    })
+}
+
+/// The integer in `value`, which must be present and within `range`.
+fn read_integer<T>(
+    skill: &str,
+    field: &'static str,
+    value: Option<&Value>,
+    range: RangeInclusive<T>,
+) -> Result<T, CharacterParseError>
+where
+    T: TryFrom<u64> + PartialOrd,
+{
+    let invalid = |problem| CharacterParseError::InvalidSkillValue {
+        skill: skill.to_owned(),
+        field,
+        problem,
+    };
+    let value = value.ok_or_else(|| CharacterParseError::MissingSkillField {
+        skill: skill.to_owned(),
+        field,
+    })?;
+    let number = value
+        .as_u64()
+        .ok_or_else(|| invalid(SkillValueProblem::NotAnInteger))?;
+    T::try_from(number)
+        .ok()
+        .filter(|candidate| range.contains(candidate))
+        .ok_or_else(|| invalid(SkillValueProblem::OutOfRange))
+}
+
+/// The warning for one record, if any. Unknown skills are not checked against
+/// the experience table because it may not apply to them.
+fn warning_for(record: &SkillRecord) -> Option<Warning> {
+    if !record.skill.is_known() {
         return Some(Warning::UnknownSkill {
-            name: skill.name().to_owned(),
+            name: record.skill.name().to_owned(),
         });
     }
-    let implied_level = level_for_experience(experience);
-    (implied_level != real_level).then(|| Warning::LevelExperienceMismatch {
-        skill: skill.clone(),
-        recorded_level: real_level,
+    let implied_level = level_for_experience(record.experience);
+    (implied_level != record.real_level).then(|| Warning::LevelExperienceMismatch {
+        skill: record.skill.clone(),
+        recorded_level: record.real_level,
         implied_level,
     })
 }
 
-fn read_level(skill: &str, raw: Raw) -> Result<u8, CharacterParseError> {
-    let value = read_integer(skill, "real_level", raw)?;
-    u8::try_from(value)
-        .ok()
-        .filter(|level| (1..=MAX_LEVEL).contains(level))
-        .ok_or_else(|| out_of_range(skill, "real_level"))
-}
+/// The entries of the `stats` object in file order, so that a repeated skill
+/// name is detectable (a map would keep only the last one). Anything that is
+/// not a JSON object fails to deserialise.
+struct SkillEntries(Vec<(String, Value)>);
 
-fn read_experience(skill: &str, raw: Raw) -> Result<u32, CharacterParseError> {
-    let value = read_integer(skill, "experience", raw)?;
-    u32::try_from(value)
-        .ok()
-        .filter(|experience| *experience <= MAX_EXPERIENCE)
-        .ok_or_else(|| out_of_range(skill, "experience"))
-}
-
-fn read_integer(skill: &str, field: &'static str, raw: Raw) -> Result<u64, CharacterParseError> {
-    let value = raw
-        .0
-        .ok_or_else(|| CharacterParseError::MissingSkillField {
-            skill: skill.to_owned(),
-            field,
-        })?;
-    value
-        .as_u64()
-        .ok_or_else(|| CharacterParseError::InvalidSkillValue {
-            skill: skill.to_owned(),
-            field,
-            problem: SkillValueProblem::NotAnInteger,
-        })
-}
-
-fn out_of_range(skill: &str, field: &'static str) -> CharacterParseError {
-    CharacterParseError::InvalidSkillValue {
-        skill: skill.to_owned(),
-        field,
-        problem: SkillValueProblem::OutOfRange,
-    }
-}
-
-// Input DTOs. They keep raw JSON values so that every rejection is mapped to
-// a typed error here rather than to a serde message that could echo input.
-
-/// A field that may be absent. Unlike `Option<T>`, an explicit JSON `null` is
-/// present, so it is reported as a wrong type rather than as missing.
-#[derive(Default)]
-struct Raw(Option<Value>);
-
-impl<'de> Deserialize<'de> for Raw {
+impl<'de> Deserialize<'de> for SkillEntries {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Value::deserialize(deserializer).map(|value| Self(Some(value)))
-    }
-}
+        struct EntriesVisitor;
 
-/// The top-level document. Deserialised from a JSON object only: a derived
-/// `Deserialize` would also accept a JSON array, filling fields by position.
-struct RawCharacter {
-    exported_at: Raw,
-    plugin_version: Raw,
-    stats: RawStatsField,
-}
+        impl<'de> Visitor<'de> for EntriesVisitor {
+            type Value = SkillEntries;
 
-impl<'de> Deserialize<'de> for RawCharacter {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_map(CharacterVisitor)
-    }
-}
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an object of skills")
+            }
 
-struct CharacterVisitor;
-
-impl<'de> Visitor<'de> for CharacterVisitor {
-    type Value = RawCharacter;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a character export object")
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut character = RawCharacter {
-            exported_at: Raw::default(),
-            plugin_version: Raw::default(),
-            stats: RawStatsField::default(),
-        };
-        while let Some(key) = map.next_key::<String>()? {
-            match key.as_str() {
-                "exported_at" => character.exported_at = map.next_value()?,
-                "plugin_version" => character.plugin_version = map.next_value()?,
-                "stats" => character.stats = map.next_value()?,
-                _ => {
-                    map.next_value::<IgnoredAny>()?;
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut entries = Vec::new();
+                while let Some(entry) = map.next_entry()? {
+                    entries.push(entry);
                 }
+                Ok(SkillEntries(entries))
             }
         }
-        Ok(character)
-    }
-}
 
-/// One skill's values. Object-only, for the same reason as [`RawCharacter`].
-struct RawSkill {
-    real_level: Raw,
-    experience: Raw,
-}
-
-impl<'de> Deserialize<'de> for RawSkill {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_map(SkillVisitor)
-    }
-}
-
-struct SkillVisitor;
-
-impl<'de> Visitor<'de> for SkillVisitor {
-    type Value = RawSkill;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a skill object")
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut skill = RawSkill {
-            real_level: Raw::default(),
-            experience: Raw::default(),
-        };
-        while let Some(key) = map.next_key::<String>()? {
-            match key.as_str() {
-                "real_level" => skill.real_level = map.next_value()?,
-                "experience" => skill.experience = map.next_value()?,
-                // Includes `boosted_level`, which is deliberately not read.
-                _ => {
-                    map.next_value::<IgnoredAny>()?;
-                }
-            }
-        }
-        Ok(skill)
-    }
-}
-
-/// `stats` as an ordered list so that a repeated key is detectable, which a
-/// map type would hide by keeping only the last value.
-#[derive(Default)]
-struct RawStatsField(Option<RawStats>);
-
-struct RawStats(Vec<(String, RawSkill)>);
-
-impl<'de> Deserialize<'de> for RawStatsField {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer
-            .deserialize_map(StatsVisitor)
-            .map(|stats| Self(Some(stats)))
-    }
-}
-
-struct StatsVisitor;
-
-impl<'de> Visitor<'de> for StatsVisitor {
-    type Value = RawStats;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("an object of skills")
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut entries = Vec::new();
-        while let Some(entry) = map.next_entry::<String, RawSkill>()? {
-            entries.push(entry);
-        }
-        Ok(RawStats(entries))
-    }
-
-    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-        Err(E::custom("stats is null"))
+        deserializer.deserialize_map(EntriesVisitor)
     }
 }

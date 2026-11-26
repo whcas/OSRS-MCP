@@ -28,10 +28,10 @@ const LEVEL_THRESHOLDS: [u32; 99] = [
 /// The level implied by `experience`, capped at [`MAX_LEVEL`].
 #[must_use]
 pub fn level_for_experience(experience: u32) -> u8 {
+    // The first threshold is 0, so at least one level is always reached, and
+    // there are only 99 thresholds, so the count fits a `u8`.
     let reached = LEVEL_THRESHOLDS.partition_point(|&threshold| threshold <= experience);
-    // `reached` is at most 99, so the conversion cannot fail; the fallback
-    // keeps this function total without a panic path.
-    u8::try_from(reached).unwrap_or(MAX_LEVEL).max(1)
+    u8::try_from(reached).unwrap_or(MAX_LEVEL)
 }
 
 #[cfg(test)]
