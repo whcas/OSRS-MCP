@@ -222,23 +222,32 @@ pub(super) fn latest(
     let data: Object = envelope.required(ENDPOINT, "data")?;
     data.0
         .iter()
-        .map(|(key, raw)| {
-            let id = item_id(ENDPOINT, key)?;
-            if scope.is_some_and(|requested| requested != id) {
-                return Err(malformed(
-                    ENDPOINT,
-                    None,
-                    "response contains an item other than the one requested",
-                ));
-            }
-            let entry: Object = from_raw(ENDPOINT, raw)?;
-            let prices = LatestPrices {
-                high: timed_price(ENDPOINT, &entry, ("high", "highTime"))?,
-                low: timed_price(ENDPOINT, &entry, ("low", "lowTime"))?,
-            };
-            Ok((id, prices))
-        })
+        .map(|(key, raw)| read_latest_entry(key, raw, scope))
         .collect()
+}
+
+/// One `data` entry of `/latest`: its item id, which must be canonical and the
+/// requested item if one was requested, and both sides' prices.
+fn read_latest_entry(
+    key: &str,
+    raw: &RawValue,
+    scope: Option<ItemId>,
+) -> Result<(ItemId, LatestPrices), MarketDataError> {
+    const ENDPOINT: Endpoint = Endpoint::Latest;
+    let id = item_id(ENDPOINT, key)?;
+    if scope.is_some_and(|requested| requested != id) {
+        return Err(malformed(
+            ENDPOINT,
+            None,
+            "response contains an item other than the one requested",
+        ));
+    }
+    let entry: Object = from_raw(ENDPOINT, raw)?;
+    let prices = LatestPrices {
+        high: timed_price(ENDPOINT, &entry, ("high", "highTime"))?,
+        low: timed_price(ENDPOINT, &entry, ("low", "lowTime"))?,
+    };
+    Ok((id, prices))
 }
 
 /// Parses a `/5m` or `/1h` body.
@@ -254,13 +263,7 @@ pub(super) fn window(
     let envelope: Object = from_json(endpoint, body)?;
     let data: Object = envelope.required(endpoint, "data")?;
     let starts_at = envelope.optional(endpoint, "timestamp")?.map(UnixSeconds);
-    if requested.is_some() && starts_at != requested {
-        return Err(malformed(
-            endpoint,
-            Some("timestamp"),
-            "window start differs from the one requested",
-        ));
-    }
+    check_window_start(endpoint, starts_at, requested)?;
     let items = data
         .0
         .iter()
@@ -272,11 +275,52 @@ pub(super) fn window(
     Ok(PriceWindow { starts_at, items })
 }
 
-/// Parses a `/timeseries` body for the `requested` item. A response for a
-/// different item, a zero timestep or a start after the end is malformed.
+/// A window requested by its start must come back with that start.
+fn check_window_start(
+    endpoint: Endpoint,
+    starts_at: Option<UnixSeconds>,
+    requested: Option<UnixSeconds>,
+) -> Result<(), MarketDataError> {
+    if requested.is_some() && starts_at != requested {
+        return Err(malformed(
+            endpoint,
+            Some("timestamp"),
+            "window start differs from the one requested",
+        ));
+    }
+    Ok(())
+}
+
+/// Parses a `/timeseries` body for the `requested` item.
 pub(super) fn timeseries(body: &[u8], requested: ItemId) -> Result<Series, MarketDataError> {
     const ENDPOINT: Endpoint = Endpoint::Timeseries;
     let envelope: Object = from_json(ENDPOINT, body)?;
+    let header = read_series_header(&envelope, requested)?;
+    let points = read_series_points(&envelope)?;
+    Ok(Series {
+        item: header.item,
+        starts_at: header.starts_at,
+        ends_at: header.ends_at,
+        timestep_seconds: header.timestep_seconds,
+        points,
+    })
+}
+
+/// The header fields of a `/timeseries` body, validated: the response must be
+/// for the requested item, the timestep must be positive and the range must not
+/// run backwards.
+struct SeriesHeader {
+    item: ItemId,
+    starts_at: UnixSeconds,
+    ends_at: UnixSeconds,
+    timestep_seconds: u64,
+}
+
+fn read_series_header(
+    envelope: &Object,
+    requested: ItemId,
+) -> Result<SeriesHeader, MarketDataError> {
+    const ENDPOINT: Endpoint = Endpoint::Timeseries;
     let item = ItemId(envelope.required(ENDPOINT, "itemId")?);
     let starts_at: u64 = envelope.required(ENDPOINT, "startTimestamp")?;
     let ends_at: u64 = envelope.required(ENDPOINT, "endTimestamp")?;
@@ -298,7 +342,19 @@ pub(super) fn timeseries(body: &[u8], requested: ItemId) -> Result<Series, Marke
             "start timestamp is after end timestamp",
         ));
     }
-    let points = envelope
+    Ok(SeriesHeader {
+        item,
+        starts_at: UnixSeconds(starts_at),
+        ends_at: UnixSeconds(ends_at),
+        timestep_seconds,
+    })
+}
+
+/// The points of a `/timeseries` body, each with its timestamp and both sides'
+/// statistics.
+fn read_series_points(envelope: &Object) -> Result<Vec<SeriesPoint>, MarketDataError> {
+    const ENDPOINT: Endpoint = Endpoint::Timeseries;
+    envelope
         .required::<Vec<Box<RawValue>>>(ENDPOINT, "data")?
         .iter()
         .map(|raw| {
@@ -308,14 +364,7 @@ pub(super) fn timeseries(body: &[u8], requested: ItemId) -> Result<Series, Marke
                 stats: window_stats(ENDPOINT, &point)?,
             })
         })
-        .collect::<Result<_, MarketDataError>>()?;
-    Ok(Series {
-        item,
-        starts_at: UnixSeconds(starts_at),
-        ends_at: UnixSeconds(ends_at),
-        timestep_seconds,
-        points,
-    })
+        .collect()
 }
 
 /// Parses a `/mapping` body. Only `id` and `name` are required; the other

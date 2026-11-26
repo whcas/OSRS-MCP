@@ -248,22 +248,13 @@ impl HardcoreClient {
         endpoint: Endpoint,
         query: &[(&str, String)],
     ) -> Result<(Url, Vec<u8>), MarketDataError> {
-        let transport = |error: &reqwest::Error| MarketDataError::Transport {
-            endpoint,
-            kind: transport_kind(error),
-        };
-        let too_large = MarketDataError::ResponseTooLarge {
-            endpoint,
-            limit_bytes: self.max_response_bytes,
-        };
-
         let url = self.endpoint_url(endpoint, query);
-        let mut response = self
+        let response = self
             .http
             .get(url.clone())
             .send()
             .await
-            .map_err(|error| transport(&error))?;
+            .map_err(|error| transport_error(endpoint, &error))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -272,20 +263,7 @@ impl HardcoreClient {
                 status: status.as_u16(),
             });
         }
-        if response
-            .content_length()
-            .is_some_and(|length| length > self.max_response_bytes as u64)
-        {
-            return Err(too_large);
-        }
-
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|error| transport(&error))? {
-            if body.len().saturating_add(chunk.len()) > self.max_response_bytes {
-                return Err(too_large);
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body = read_bounded_body(response, endpoint, self.max_response_bytes).await?;
         Ok((url, body))
     }
 
@@ -298,6 +276,47 @@ impl HardcoreClient {
             url.query_pairs_mut().extend_pairs(query);
         }
         url
+    }
+}
+
+/// Reads a response body of at most `limit` bytes. The limit applies twice: to
+/// the length the server declares, which is refused before any byte is read,
+/// and to the bytes actually received, since the declaration may be absent or
+/// wrong.
+async fn read_bounded_body(
+    mut response: reqwest::Response,
+    endpoint: Endpoint,
+    limit: usize,
+) -> Result<Vec<u8>, MarketDataError> {
+    let too_large = MarketDataError::ResponseTooLarge {
+        endpoint,
+        limit_bytes: limit,
+    };
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(too_large);
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| transport_error(endpoint, &error))?
+    {
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(too_large);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn transport_error(endpoint: Endpoint, error: &reqwest::Error) -> MarketDataError {
+    MarketDataError::Transport {
+        endpoint,
+        kind: transport_kind(error),
     }
 }
 
