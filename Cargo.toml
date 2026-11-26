@@ -19,6 +19,9 @@ serde = { version = "1", features = ["derive"] }
 # text so that repeated skill names stay visible. It changes no existing
 # behaviour, unlike `arbitrary_precision`, which is global.
 serde_json = { version = "1", features = ["raw_value"] }
+# Derive for typed error enums (maintainer decision, #41). Compile-time only; the
+# locked version is already pulled in by rmcp.
+thiserror = "2"
 tokio = { version = "1", features = ["rt"] }
 
 [dev-dependencies]

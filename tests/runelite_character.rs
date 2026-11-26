@@ -389,3 +389,22 @@ fn error_messages_never_echo_input_values() {
     assert!(!err.to_string().contains("secret-value"));
     assert!(!format!("{err:?}").contains("secret-value"));
 }
+
+#[test]
+fn json_errors_convert_by_category_without_keeping_their_text() {
+    let eof = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+    let syntax = serde_json::from_str::<serde_json::Value>("{ nope }").unwrap_err();
+    let data = serde_json::from_str::<u8>(r#""secret-value""#).unwrap_err();
+    assert_eq!(
+        CharacterParseError::from(eof),
+        CharacterParseError::Truncated
+    );
+    assert_eq!(
+        CharacterParseError::from(syntax),
+        CharacterParseError::InvalidJson
+    );
+    let converted = CharacterParseError::from(data);
+    assert_eq!(converted, CharacterParseError::UnexpectedShape);
+    assert!(!converted.to_string().contains("secret-value"));
+    assert!(!format!("{converted:?}").contains("secret-value"));
+}

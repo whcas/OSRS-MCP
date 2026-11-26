@@ -12,6 +12,7 @@ use std::ops::RangeInclusive;
 use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
 use serde_json::Value;
 use serde_json::value::RawValue;
+use thiserror::Error;
 
 use super::experience::{MAX_EXPERIENCE, MAX_LEVEL, level_for_experience};
 use super::skill::Skill;
@@ -99,34 +100,52 @@ pub enum SkillValueProblem {
     OutOfRange,
 }
 
+impl fmt::Display for SkillValueProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotAnInteger => "is not a non-negative integer",
+            Self::OutOfRange => "is out of range",
+        })
+    }
+}
+
 /// Why `character.json` could not be imported. No variant carries an input
 /// value other than a skill name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CharacterParseError {
     /// The input ended inside a JSON value, or was empty. The plugin does not
     /// write atomically, so this usually means a write was in progress: retry.
+    #[error("export ended unexpectedly (a write may be in progress)")]
     Truncated,
     /// The input is not valid JSON.
+    #[error("export is not valid JSON")]
     InvalidJson,
     /// Valid JSON of an unexpected shape, for example not an object.
+    #[error("export JSON has an unexpected shape")]
     UnexpectedShape,
     /// A required top-level field is absent.
+    #[error("required field `{field}` is missing")]
     MissingField {
         /// The field name.
         field: &'static str,
     },
     /// `exported_at` is not a timestamp the plugin writes.
+    #[error("`exported_at` is not a recognised timestamp")]
     InvalidTimestamp,
     /// `plugin_version` is present but not a string.
+    #[error("`plugin_version` is not a string")]
     InvalidPluginVersion,
     /// `stats` is an empty object.
+    #[error("`stats` contains no skills")]
     NoSkills,
     /// A skill appears twice in `stats`.
+    #[error("skill `{name}` appears more than once")]
     DuplicateSkill {
         /// The skill name.
         name: String,
     },
     /// A skill lacks a required value.
+    #[error("skill `{skill}` is missing `{field}`")]
     MissingSkillField {
         /// The skill name.
         skill: String,
@@ -134,6 +153,7 @@ pub enum CharacterParseError {
         field: &'static str,
     },
     /// A skill value is not acceptable.
+    #[error("skill `{skill}` field `{field}` {problem}")]
     InvalidSkillValue {
         /// The skill name.
         skill: String,
@@ -153,38 +173,19 @@ impl CharacterParseError {
     }
 }
 
-impl fmt::Display for CharacterParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Truncated => {
-                f.write_str("export ended unexpectedly (a write may be in progress)")
+/// Classifies a JSON failure by kind only. The serde error is not kept: its
+/// text can quote the input, which may be private.
+impl From<serde_json::Error> for CharacterParseError {
+    fn from(error: serde_json::Error) -> Self {
+        match error.classify() {
+            serde_json::error::Category::Eof => Self::Truncated,
+            serde_json::error::Category::Syntax | serde_json::error::Category::Io => {
+                Self::InvalidJson
             }
-            Self::InvalidJson => f.write_str("export is not valid JSON"),
-            Self::UnexpectedShape => f.write_str("export JSON has an unexpected shape"),
-            Self::MissingField { field } => write!(f, "required field `{field}` is missing"),
-            Self::InvalidTimestamp => f.write_str("`exported_at` is not a recognised timestamp"),
-            Self::InvalidPluginVersion => f.write_str("`plugin_version` is not a string"),
-            Self::NoSkills => f.write_str("`stats` contains no skills"),
-            Self::DuplicateSkill { name } => write!(f, "skill `{name}` appears more than once"),
-            Self::MissingSkillField { skill, field } => {
-                write!(f, "skill `{skill}` is missing `{field}`")
-            }
-            Self::InvalidSkillValue {
-                skill,
-                field,
-                problem,
-            } => {
-                let reason = match problem {
-                    SkillValueProblem::NotAnInteger => "is not a non-negative integer",
-                    SkillValueProblem::OutOfRange => "is out of range",
-                };
-                write!(f, "skill `{skill}` field `{field}` {reason}")
-            }
+            serde_json::error::Category::Data => Self::UnexpectedShape,
         }
     }
 }
-
-impl std::error::Error for CharacterParseError {}
 
 /// Parses the bytes of one `character.json`.
 ///
@@ -197,8 +198,7 @@ impl std::error::Error for CharacterParseError {}
 pub fn parse_character_export(bytes: &[u8]) -> Result<CharacterExport, CharacterParseError> {
     // Fields stay as raw JSON text so that `stats` can be read in file order,
     // which a `Value` map would not allow. Unknown fields are never examined.
-    let fields: BTreeMap<String, Box<RawValue>> =
-        serde_json::from_slice(bytes).map_err(|error| classify_json_error(&error))?;
+    let fields: BTreeMap<String, Box<RawValue>> = serde_json::from_slice(bytes)?;
 
     let exported_at = match read_value(&fields, "exported_at")? {
         None => {
@@ -219,8 +219,7 @@ pub fn parse_character_export(bytes: &[u8]) -> Result<CharacterExport, Character
     let stats = fields
         .get("stats")
         .ok_or(CharacterParseError::MissingField { field: "stats" })?;
-    let SkillEntries(entries) =
-        serde_json::from_str(stats.get()).map_err(|error| classify_json_error(&error))?;
+    let SkillEntries(entries) = serde_json::from_str(stats.get())?;
     let (skills, warnings) = read_skills(&entries)?;
 
     Ok(CharacterExport {
@@ -241,17 +240,7 @@ fn read_value(
         .get(name)
         .map(|raw| serde_json::from_str(raw.get()))
         .transpose()
-        .map_err(|error| classify_json_error(&error))
-}
-
-fn classify_json_error(error: &serde_json::Error) -> CharacterParseError {
-    match error.classify() {
-        serde_json::error::Category::Eof => CharacterParseError::Truncated,
-        serde_json::error::Category::Syntax | serde_json::error::Category::Io => {
-            CharacterParseError::InvalidJson
-        }
-        serde_json::error::Category::Data => CharacterParseError::UnexpectedShape,
-    }
+        .map_err(CharacterParseError::from)
 }
 
 fn read_skills(
