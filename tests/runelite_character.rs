@@ -40,8 +40,8 @@ fn the_export_time_keeps_its_original_text_and_a_parsed_instant() {
     let export = parse_character_export(SYNTHETIC).expect("valid");
     let at = export.exported_at();
     assert_eq!(at.text(), "2026-01-01T12:00:00.123456Z");
-    assert_eq!(at.unix_seconds(), 1_767_268_800);
-    assert_eq!(at.nanos(), 123_456_000);
+    assert_eq!(at.timestamp().as_second(), 1_767_268_800);
+    assert_eq!(at.timestamp().subsec_nanosecond(), 123_456_000);
 }
 
 #[test]
@@ -75,8 +75,8 @@ fn timestamps_in_every_form_java_can_print_are_accepted() {
     ];
     for (text, seconds, nanos) in cases {
         let at = ExportedAt::parse(text).unwrap_or_else(|| panic!("{text} should parse"));
-        assert_eq!(at.unix_seconds(), seconds, "{text}");
-        assert_eq!(at.nanos(), nanos, "{text}");
+        assert_eq!(at.timestamp().as_second(), seconds, "{text}");
+        assert_eq!(at.timestamp().subsec_nanosecond(), nanos, "{text}");
         assert_eq!(at.text(), text);
     }
 }
@@ -87,24 +87,45 @@ fn malformed_timestamps_are_rejected() {
         "",
         "2026-01-01",
         "2026-01-01T12:00",
-        "2026-01-01 12:00Z",
         "2026-13-01T12:00Z",
         "2026-02-29T12:00Z",
         "2026-01-32T12:00Z",
         "2026-01-01T24:00Z",
         "2026-01-01T12:60Z",
-        "2026-01-01T12:00:60Z",
         "2026-01-01T12:00:00.Z",
         "2026-01-01T12:00:00.1234567890Z",
-        "2026-01-01T12:00:00+25:00",
-        "2026-01-01t12:00:00z",
         "2026-01-01T12:00Zjunk",
+        "2026-01-01T12:00:00 Z",
+        "2026-01-01T12:00:00[UTC]",
     ];
     for text in cases {
         assert!(
             ExportedAt::parse(text).is_none(),
             "{text:?} should be rejected"
         );
+    }
+}
+
+#[test]
+fn a_leap_second_is_normalised_to_the_previous_second() {
+    let leap = ExportedAt::parse("2026-01-01T12:00:60Z").expect("accepted");
+    let normal = ExportedAt::parse("2026-01-01T12:00:59Z").expect("valid");
+    assert_eq!(leap.timestamp(), normal.timestamp());
+    assert_eq!(leap.timestamp().as_second(), 1_767_268_859);
+    // The original text is still the text that was exported.
+    assert_eq!(leap.text(), "2026-01-01T12:00:60Z");
+}
+
+#[test]
+fn lenient_forms_the_plugin_never_writes_are_accepted_and_documented() {
+    // These are accepted by the underlying parser; see `ExportedAt::parse`.
+    for text in [
+        "2026-01-01 12:00:00Z",
+        "2026-01-01t12:00:00z",
+        "20260101T120000Z",
+        "2026-01-01T12:00:00+25:00",
+    ] {
+        assert!(ExportedAt::parse(text).is_some(), "{text:?} is accepted");
     }
 }
 
@@ -269,6 +290,23 @@ fn unknown_skills_are_kept_with_a_warning_and_not_checked_against_the_table() {
             name: "Necromancy".to_owned()
         }]
     );
+}
+
+#[test]
+fn skills_are_returned_in_the_order_the_file_lists_them() {
+    let body = format!(
+        "{},{},{}",
+        r#""Mining":{"real_level":1,"experience":0}"#,
+        r#""Attack":{"real_level":1,"experience":0}"#,
+        r#""Sailing":{"real_level":1,"experience":0}"#,
+    );
+    let export = parse(&document("2026-01-01T00:00Z", &body)).expect("valid");
+    let order: Vec<_> = export
+        .skills()
+        .iter()
+        .map(|record| record.skill.name())
+        .collect();
+    assert_eq!(order, ["Mining", "Attack", "Sailing"]);
 }
 
 #[test]
