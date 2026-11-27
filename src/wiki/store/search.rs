@@ -13,6 +13,13 @@
 //! page id, section index and chunk index, so the same database and query
 //! always give the same list. The equal weights are a starting point to be
 //! tuned against the evaluation dataset, not a measured choice.
+//!
+//! **Ranking scope.** The `source` argument filters which hits are returned,
+//! but the index is shared by every source in the database, so its `bm25`
+//! statistics (term rarity and average length) are corpus-wide. Importing
+//! another source can change the relative order of hits in this one. To compare
+//! rankings, as the evaluation runner does, use a database that holds only the
+//! source under test, and keep it fixed between runs.
 
 use rusqlite::params;
 use thiserror::Error;

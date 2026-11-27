@@ -53,6 +53,7 @@ use super::{
     RevisionId, RevisionTimestamp, SourceId, prepare,
 };
 pub use error::{Operation, StoreError};
+use lookup::title_key;
 pub use lookup::{Resolution, TitleMatch};
 pub use search::{
     InvalidSearch, MAX_QUERY_BYTES, MAX_QUERY_TERMS, MAX_RESULTS, SearchHit, SearchQuery,
@@ -430,8 +431,9 @@ fn insert_page(
     connection
         .execute(
             "INSERT INTO page (source_id, page_id, namespace, title, revision_id,
-                               revision_time, revision_seconds, hash, redirect_target, text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                               revision_time, revision_seconds, hash, redirect_target, text,
+                               title_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             page_params(source_key, page)?,
         )
         .map_err(StoreError::database(Operation::Write))?;
@@ -446,7 +448,8 @@ fn update_page(
     connection
         .execute(
             "UPDATE page SET namespace = ?3, title = ?4, revision_id = ?5, revision_time = ?6,
-                             revision_seconds = ?7, hash = ?8, redirect_target = ?9, text = ?10
+                             revision_seconds = ?7, hash = ?8, redirect_target = ?9, text = ?10,
+                             title_key = ?11
              WHERE source_id = ?1 AND page_id = ?2",
             page_params(source_key, page)?,
         )
@@ -465,6 +468,7 @@ type PageParams<'page> = (
     Option<&'page str>,
     Option<&'page str>,
     &'page str,
+    String,
 );
 
 fn page_params(source_key: i64, page: &ImportedPage) -> Result<PageParams<'_>, StoreError> {
@@ -479,6 +483,7 @@ fn page_params(source_key: i64, page: &ImportedPage) -> Result<PageParams<'_>, S
         page.hash.as_ref().map(ExportedHash::as_str),
         page.redirect_target.as_ref().map(PageTitle::as_str),
         &page.text,
+        title_key(page.title.as_str()),
     ))
 }
 
