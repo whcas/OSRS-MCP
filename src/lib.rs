@@ -7,6 +7,7 @@ pub mod domain;
 pub mod market;
 pub mod mcp;
 pub mod profit;
+pub mod runelite;
 pub mod wiki;
 
 /// Static build metadata for this crate.

@@ -8,6 +8,9 @@ repository = "https://github.com/whcas/OSRS-MCP"
 publish = false
 
 [dependencies]
+# Date and time. Only `Timestamp` parsing and formatting are used, so default
+# features (time zone database, system zone lookup, logging) are off.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 quick-xml = "0.42"
 # HTTP client for the Hardcore prices API. Default features are disabled: only
 # the rustls TLS backend is needed, and bodies are parsed by this crate.
