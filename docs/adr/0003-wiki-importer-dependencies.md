@@ -12,7 +12,7 @@ The Wiki corpus comes from manually downloaded `Special:Export` XML (ADR-0002). 
 
 - **Parse with [`quick-xml`](https://crates.io/crates/quick-xml) 0.42**, default features only (the crate has none by default). It is a pull parser over `BufRead`, so the importer decides what is buffered and can stop reading at its limits. It does not resolve external entities or fetch external resources, and it reports `<!DOCTYPE>` as an event, which the importer rejects. Its namespace-aware reader checks the export namespace. Optional features (`encoding`, `serialize`, `async-tokio`) stay off: exports are UTF-8, nothing is deserialised through serde, and the importer is synchronous.
 - **No hashing crate yet.** The export's per-revision `sha1` element is stored as the opaque string the wiki reported, validated for shape only. It is not recomputed from the text, so no requirement yet needs `sha1` or `sha2`. The first change that must compute or verify a hash (for example change detection in #34) states that requirement and adds the crate then.
-- **No date and time crate.** Export timestamps have one fixed shape, whole-second `YYYY-MM-DDTHH:MM:SSZ`. A small strict parser converts them to the shared `UnixSeconds` and keeps the original text. #31 introduces `jiff`; replacing the parser with it later is a local change.
+- **Timestamps use `jiff`**, already a dependency since #31, so no new date crate is added. Export timestamps have one fixed shape, whole-second `YYYY-MM-DDTHH:MM:SSZ`. `jiff` does the calendar arithmetic; because it is lenient (offsets, fractions, leap seconds), the importer also requires the text to equal what `jiff` prints for the parsed whole-second instant, then converts it to the shared `UnixSeconds` and keeps the original text.
 - **Approved for later PRs, not adopted here:** `rusqlite` (bundled SQLite with FTS5) for #34, and `tempfile` as a dev-dependency. Each is added by the first PR that uses it, with its own justification and `scripts/check.sh audit`.
 
 ## Alternatives considered
@@ -31,4 +31,4 @@ The Wiki corpus comes from manually downloaded `Special:Export` XML (ADR-0002). 
 ## Verification and revisit criteria
 
 - Unit tests in the importer cover DOCTYPE and entity rejection, unsupported schema, and the input, page, text and depth limits, all with synthetic XML.
-- Revisit if `quick-xml` is flagged as unmaintained, if a later change needs hash verification, or if `jiff` makes the timestamp parser redundant.
+- Revisit if `quick-xml` is flagged as unmaintained, if a later change needs hash verification, or if `jiff` changes how it prints timestamps.
