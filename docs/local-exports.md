@@ -84,3 +84,16 @@ Read-only, no input. Reads `equipment.json` on each call and returns the same ro
 - An observed empty equipment file is `status: ok` with no rows, which is a valid state. A missing `equipment.json` is `file_not_found`, never "nothing equipped".
 - Equipment is a separate observation with its own `exported_at`; it is not guaranteed consistent with the bank or inventory files.
 - No prices, valuation or totals; no account name, world, session id, path or raw JSON.
+
+## The `quest_status` tool
+
+Read-only. Reads `quests.json` on each call. Input (all optional): `state` (`finished`, `in_progress` or `not_started`), `offset` (matching quests to skip, default 0) and `limit` (1 to 250, default 100). There is no path or file input.
+
+- `counts` (`recorded`, `finished`, `in_progress`, `not_started`) are computed over **every recorded quest** and ignore `state`, `offset` and `limit`. `matched` is the number of quests after the `state` filter and before paging; the filter is applied before `offset` and `limit`. `truncated` says whether matching quests follow the returned page. An offset past the end is an empty page, not a failure.
+- `quests` keep the file's order. Each has `runelite_id`, `name` and `state`. **`runelite_id` is RuneLite's internal quest ID, not a Wiki or game-cache ID**, and `name` is RuneLite's display text (untrusted, cut to 64 characters with `name_truncated`); it can differ from the Wiki title. Nothing here maps quests to Wiki pages, checks requirements or says which quests are available.
+- **A quest absent from the file is unrecorded, not "not started"**, and is not counted. A missing `quests.json` is `file_not_found`, never an empty list. A file that records an empty list is `ok` with `counts.recorded: 0`.
+- `warnings` are advisory and never change the quests: `summary_mismatch` (the file's own counters disagree with its rows) and `all_not_started` (every recorded quest is not started, which can be a new account or a snapshot taken before the client finished loading).
+- The same timing fields as the other account tools (`exported_at`, `read_at`, `seconds_since_last_change`, `exported_at_in_future`, `plugin_version`). The file is **not** guaranteed consistent with any other export file.
+- No account name, world, session id, path or raw JSON.
+
+Failures use the same fixed statuses as `character_summary`, with messages naming `quests.json`.

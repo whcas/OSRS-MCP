@@ -64,6 +64,7 @@ async fn tool_discovery_lists_only_described_read_only_tools_including_server_in
             "equipment_contents",
             "item_prices",
             "item_search",
+            "quest_status",
             "server_info"
         ],
         "tools: {tools:?}"
