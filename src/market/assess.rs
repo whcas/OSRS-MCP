@@ -121,7 +121,7 @@ pub fn assess_latest(
     }
 }
 
-fn assess_side(timed: TimedPrice, now: UnixSeconds, max_age: MaxAge) -> SideAssessment {
+const fn assess_side(timed: TimedPrice, now: UnixSeconds, max_age: MaxAge) -> SideAssessment {
     let age = match classify_age(timed.observed_at, now, Duration::from_secs(max_age.0)) {
         Freshness::Fresh => ObservationAge::Fresh {
             // Not in the future, so this difference is the exact age.
@@ -143,11 +143,11 @@ mod tests {
 
     const NOW: UnixSeconds = UnixSeconds(10_000);
 
-    fn timed(price: u64, observed_at: u64) -> Option<TimedPrice> {
-        Some(TimedPrice {
+    fn timed(price: u64, observed_at: u64) -> TimedPrice {
+        TimedPrice {
             price: Price(price),
             observed_at: UnixSeconds(observed_at),
-        })
+        }
     }
 
     fn prices(high: Option<TimedPrice>, low: Option<TimedPrice>) -> LatestPrices {
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn a_missing_side_stays_missing_and_is_never_filled_from_the_other() {
-        let assessment = assess(Some(&prices(timed(100, 9_990), None)));
+        let assessment = assess(Some(&prices(Some(timed(100, 9_990)), None)));
 
         assert!(assessment.high.is_some());
         assert_eq!(assessment.low, None);
@@ -189,14 +189,17 @@ mod tests {
 
     #[test]
     fn a_real_zero_price_is_kept_as_zero() {
-        let assessment = assess(Some(&prices(None, timed(0, 9_990))));
+        let assessment = assess(Some(&prices(None, Some(timed(0, 9_990)))));
 
         assert_eq!(assessment.low.map(|side| side.price), Some(Price(0)));
     }
 
     #[test]
     fn each_side_is_classified_independently() {
-        let assessment = assess(Some(&prices(timed(100, 9_990), timed(90, 1_000))));
+        let assessment = assess(Some(&prices(
+            Some(timed(100, 9_990)),
+            Some(timed(90, 1_000)),
+        )));
 
         assert_eq!(
             assessment.high.map(|side| side.age),
@@ -210,8 +213,8 @@ mod tests {
 
     #[test]
     fn the_age_limit_is_inclusive_and_zero_is_a_valid_strict_limit() {
-        let at_limit = timed(1, 10_000 - DEFAULT_MAX_AGE_SECONDS);
-        let past_limit = timed(1, 10_000 - DEFAULT_MAX_AGE_SECONDS - 1);
+        let at_limit = Some(timed(1, 10_000 - DEFAULT_MAX_AGE_SECONDS));
+        let past_limit = Some(timed(1, 10_000 - DEFAULT_MAX_AGE_SECONDS - 1));
 
         let fresh = assess_latest(Some(&prices(at_limit, past_limit)), NOW, MaxAge::DEFAULT);
         assert_eq!(
@@ -225,7 +228,7 @@ mod tests {
 
         let strict = MaxAge::new(0).unwrap();
         let exact = assess_latest(
-            Some(&prices(timed(1, 10_000), timed(1, 9_999))),
+            Some(&prices(Some(timed(1, 10_000)), Some(timed(1, 9_999)))),
             NOW,
             strict,
         );
@@ -241,7 +244,7 @@ mod tests {
 
     #[test]
     fn a_future_dated_observation_reports_how_far_ahead_it_is_never_fresh() {
-        let assessment = assess(Some(&prices(timed(100, 10_500), None)));
+        let assessment = assess(Some(&prices(Some(timed(100, 10_500)), None)));
 
         assert_eq!(
             assessment.high.map(|side| side.age),
@@ -252,7 +255,10 @@ mod tests {
     #[test]
     fn crossed_sides_keep_both_prices_and_are_flagged() {
         // Instant-sell above instant-buy.
-        let assessment = assess(Some(&prices(timed(100, 9_990), timed(120, 9_990))));
+        let assessment = assess(Some(&prices(
+            Some(timed(100, 9_990)),
+            Some(timed(120, 9_990)),
+        )));
 
         assert_eq!(assessment.crossed, Some(true));
         assert_eq!(assessment.high.map(|side| side.price), Some(Price(100)));
@@ -261,8 +267,14 @@ mod tests {
 
     #[test]
     fn equal_and_ordinary_sides_are_not_crossed() {
-        let equal = assess(Some(&prices(timed(100, 9_990), timed(100, 9_990))));
-        let ordinary = assess(Some(&prices(timed(100, 9_990), timed(80, 9_990))));
+        let equal = assess(Some(&prices(
+            Some(timed(100, 9_990)),
+            Some(timed(100, 9_990)),
+        )));
+        let ordinary = assess(Some(&prices(
+            Some(timed(100, 9_990)),
+            Some(timed(80, 9_990)),
+        )));
 
         assert_eq!(equal.crossed, Some(false));
         assert_eq!(ordinary.crossed, Some(false));
