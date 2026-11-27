@@ -152,6 +152,16 @@ fn initialize_request() -> Value {
     })
 }
 
+/// Names in a `tools/list` response, in the order the server listed them.
+fn tool_names(response: &Value) -> Vec<&str> {
+    response["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .collect()
+}
+
 #[test]
 fn serves_server_info_over_stdio_with_a_clean_stdout() {
     let mut server = ServerProcess::start();
@@ -165,7 +175,10 @@ fn serves_server_info_over_stdio_with_a_clean_stdout() {
     server.send(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
     let tools = server.receive();
     assert_eq!(tools["id"], 2);
-    assert_eq!(tools["result"]["tools"][0]["name"], "server_info");
+    assert!(
+        tool_names(&tools).contains(&"server_info"),
+        "tools: {tools}"
+    );
 
     server.send(&json!({
         "jsonrpc": "2.0",
@@ -227,7 +240,10 @@ fn malformed_input_is_skipped_without_polluting_stdout() {
     server.send(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
     let tools = server.receive();
     assert_eq!(tools["id"], 2, "server should keep serving: {tools}");
-    assert_eq!(tools["result"]["tools"][0]["name"], "server_info");
+    assert!(
+        tool_names(&tools).contains(&"server_info"),
+        "tools: {tools}"
+    );
 
     let (status, leftover, stderr) = server.close_and_wait();
     assert!(
