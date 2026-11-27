@@ -228,7 +228,8 @@ Because the Wiki changes with game updates, a judged section may be renamed or r
 
 ## How future implementations use the dataset
 
-- A scorer reads `dataset.v1.json` and a run file and prints the metrics above. It should read the dataset through `osrs_mcp::eval::Dataset::parse`, which validates the documented format.
+- `osrs_mcp::eval::Dataset::parse` validates the dataset. `osrs_mcp::eval::scorer::score_query` scores ranked hits for one query from explicit corpus observations and a rank cutoff. It reports judgement availability, revision mismatches, separate page and section recall, hit rate and reciprocal rank for both denominators, and section nDCG where it applies.
+- The planned offline runner will read the dataset and corpus, provide the scorer's inputs, and combine results by category, mode and review tier. It will also report title resolution, missing material, response size and latency.
 - The first keyword engine is run against the dataset to set a baseline. Semantic retrieval or other additions are justified only if they improve the metrics that matter at acceptable cost, as the README principle says.
 - Tests that depend on the Wiki must use synthetic fixtures and not this dataset's references, so unit tests stay offline and independent of the live site.
 
