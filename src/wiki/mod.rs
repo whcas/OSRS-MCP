@@ -6,14 +6,20 @@
 //!
 //! # Layout
 //!
+//! - `export`: the streaming importer for `Special:Export` XML ([`ExportReader`]).
 //! - `model`: plain types for a page and its provenance ([`ImportedPage`],
 //!   [`SourceId`]).
 //! - `timestamp`: the export's fixed-shape revision timestamp.
 //!
 //! Wiki types stay independent of MCP, storage and the CLI.
 
+mod export;
 mod model;
 mod timestamp;
 
+pub use export::{
+    ExportError, ExportReader, ExportSummary, ImportIssue, ImportLimits, LimitKind, PageField,
+    PageIssue, PageIssueKind, XmlFault,
+};
 pub use model::{ExportedHash, ImportedPage, PageId, PageTitle, RevisionId, SourceField, SourceId};
 pub use timestamp::{InvalidTimestamp, RevisionTimestamp};
