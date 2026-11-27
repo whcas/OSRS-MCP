@@ -8,6 +8,7 @@
 //! [`OsrsMcpServer::new`] combines them. Adding a family is one module plus one
 //! `+` in `new`, which keeps unrelated tool changes from conflicting.
 
+mod character;
 mod info;
 mod market;
 mod market_data;
@@ -30,8 +31,13 @@ use rmcp::{
 
 use crate::build_info;
 use crate::market::{ClientConfig, ConfigError, HardcoreClient};
+use crate::runelite::LocalExportSource;
 use market_data::MarketData;
 
+pub use character::{
+    CharacterSummary, CharacterSummaryFailure, ExportedAtOutput, FailureStatus, SkillOutput,
+    SummaryStatus, UnreadableReason, WarningOutput,
+};
 pub use info::ServerInfoOutput;
 
 /// Instructions shown to clients that surface server guidance.
@@ -45,11 +51,14 @@ when it was retrieved; they never substitute standard-world data.";
 pub struct OsrsMcpServer {
     tool_router: ToolRouter<Self>,
     market: Arc<dyn MarketData>,
+    export_source: LocalExportSource,
 }
 
 impl OsrsMcpServer {
     /// Creates a server with all tools registered, reading Hardcore market data
-    /// from the live prices API. Construction performs no network request.
+    /// from the live prices API and with no `RuneLite` export directory
+    /// configured; see [`with_export_source`](Self::with_export_source).
+    /// Construction performs no network request.
     ///
     /// # Errors
     ///
@@ -65,11 +74,20 @@ impl OsrsMcpServer {
     fn with_market(market: Arc<dyn MarketData>) -> Self {
         Self {
             tool_router: Self::info_router()
+                + Self::character_router()
                 + Self::market_router()
                 + Self::prices_router()
                 + Self::profit_router(),
             market,
+            export_source: LocalExportSource::unconfigured(),
         }
+    }
+
+    /// Sets where account tools read the local `RuneLite` export from.
+    #[must_use]
+    pub fn with_export_source(mut self, source: LocalExportSource) -> Self {
+        self.export_source = source;
+        self
     }
 }
 
@@ -107,8 +125,9 @@ impl ServerHandler for OsrsMcpServer {
 /// Returns an error if the server cannot be configured, the MCP handshake fails or
 /// the connection ends abnormally.
 pub async fn serve_stdio() -> Result<(), ServeError> {
-    let server =
-        OsrsMcpServer::new().map_err(|error| ServeError::Configuration(Box::new(error)))?;
+    let server = OsrsMcpServer::new()
+        .map_err(|error| ServeError::Configuration(Box::new(error)))?
+        .with_export_source(LocalExportSource::from_env());
     serve(server, rmcp::transport::stdio()).await
 }
 
