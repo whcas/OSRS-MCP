@@ -29,8 +29,15 @@
 //! revision of a page is kept. The source is identified by the site name,
 //! database name and base URL of the export header, which is unverified
 //! provenance (see [`SourceId`]).
+//!
+//! # Lookup
+//!
+//! [`Store::page_by_title`] finds the page with an exact title and
+//! [`Store::resolve`] follows redirects from it, reporting a missing target, a
+//! loop or an ambiguous title as a [`Resolution`] rather than an empty result.
 
 mod error;
+mod lookup;
 mod schema;
 
 use std::ops::Range;
@@ -43,6 +50,8 @@ use super::{
     RevisionId, RevisionTimestamp, SourceId, prepare,
 };
 pub use error::{Operation, StoreError};
+use lookup::title_key;
+pub use lookup::{Resolution, TitleMatch};
 
 /// Separates the entries of a list stored in one text column. None of the
 /// stored names (headings, templates, link targets) can contain a line break.
@@ -416,8 +425,9 @@ fn insert_page(
     connection
         .execute(
             "INSERT INTO page (source_id, page_id, namespace, title, revision_id,
-                               revision_time, revision_seconds, hash, redirect_target, text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                               revision_time, revision_seconds, hash, redirect_target, text,
+                               title_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             page_params(source_key, page)?,
         )
         .map_err(StoreError::database(Operation::Write))?;
@@ -432,7 +442,8 @@ fn update_page(
     connection
         .execute(
             "UPDATE page SET namespace = ?3, title = ?4, revision_id = ?5, revision_time = ?6,
-                             revision_seconds = ?7, hash = ?8, redirect_target = ?9, text = ?10
+                             revision_seconds = ?7, hash = ?8, redirect_target = ?9, text = ?10,
+                             title_key = ?11
              WHERE source_id = ?1 AND page_id = ?2",
             page_params(source_key, page)?,
         )
@@ -451,6 +462,7 @@ type PageParams<'page> = (
     Option<&'page str>,
     Option<&'page str>,
     &'page str,
+    String,
 );
 
 fn page_params(source_key: i64, page: &ImportedPage) -> Result<PageParams<'_>, StoreError> {
@@ -465,6 +477,7 @@ fn page_params(source_key: i64, page: &ImportedPage) -> Result<PageParams<'_>, S
         page.hash.as_ref().map(ExportedHash::as_str),
         page.redirect_target.as_ref().map(PageTitle::as_str),
         &page.text,
+        title_key(page.title.as_str()),
     ))
 }
 
@@ -713,13 +726,13 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    struct Fixture {
+    pub(super) struct Fixture {
         directory: TempDir,
-        source: SourceId,
+        pub(super) source: SourceId,
     }
 
     impl Fixture {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             Self {
                 directory: TempDir::new().unwrap(),
                 source: SourceId::new(
@@ -735,12 +748,12 @@ mod tests {
             self.directory.path().join("wiki.sqlite")
         }
 
-        fn open(&self) -> Store {
+        pub(super) fn open(&self) -> Store {
             Store::open(&self.path()).unwrap()
         }
     }
 
-    fn page(id: u64, revision: u64, text: &str) -> ImportedPage {
+    pub(super) fn page(id: u64, revision: u64, text: &str) -> ImportedPage {
         ImportedPage {
             id: PageId::new(id).unwrap(),
             namespace: 0,
@@ -753,7 +766,11 @@ mod tests {
         }
     }
 
-    fn import(store: &mut Store, source: &SourceId, pages: &[ImportedPage]) -> ImportSummary {
+    pub(super) fn import(
+        store: &mut Store,
+        source: &SourceId,
+        pages: &[ImportedPage],
+    ) -> ImportSummary {
         let mut session = store
             .begin_import(source, PrepareLimits::default())
             .unwrap();
@@ -763,7 +780,7 @@ mod tests {
         session.commit().unwrap()
     }
 
-    fn page_id(id: u64) -> PageId {
+    pub(super) fn page_id(id: u64) -> PageId {
         PageId::new(id).unwrap()
     }
 
