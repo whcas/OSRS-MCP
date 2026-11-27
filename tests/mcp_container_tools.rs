@@ -92,7 +92,11 @@ async fn bank_contents_is_listed_read_only_with_a_typed_output_and_paging_inputs
         .map(String::as_str)
         .collect();
     properties.sort_unstable();
-    assert_eq!(properties, ["limit", "offset"], "no path-like input");
+    assert_eq!(
+        properties,
+        ["item_ids", "limit", "offset"],
+        "no path-like input"
+    );
 }
 
 #[tokio::test]
@@ -135,6 +139,143 @@ async fn an_empty_bank_is_ok_and_a_missing_file_is_a_failure() {
     let missing = failure_json(&call(&client, "bank_contents", json!({})).await);
     assert_eq!(missing["status"], "file_not_found");
     assert!(missing["message"].as_str().unwrap().contains("bank.json"));
+}
+
+/// A bank of 1,200 rows. Slot `n` holds item `10_000 + n`, except that item 555
+/// is also in slots 3, 700 and 1,150 and item 777 is in slot 1,190.
+fn large_bank_json() -> String {
+    let rows: Vec<String> = (0..1_200)
+        .map(|slot| {
+            let id = match slot {
+                3 | 700 | 1_150 => 555,
+                1_190 => 777,
+                _ => 10_000 + slot,
+            };
+            format!(r#"{{"slot":{slot},"id":{id},"quantity":1}}"#)
+        })
+        .collect();
+    format!(
+        r#"{{"exported_at":"2026-01-01T12:00:00Z","kind":"bank","item_count":1200,"items":[{}]}}"#,
+        rows.join(",")
+    )
+}
+
+fn slots(result: &Value) -> Vec<u64> {
+    result["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| row["slot"].as_u64().expect("slot"))
+        .collect()
+}
+
+#[tokio::test]
+async fn an_item_filter_searches_the_whole_bank_before_paging() {
+    let (_dir, source) = source_with(BANK_FILE_NAME, &large_bank_json());
+    let (client, _server) = connect(source).await;
+    // 555 repeats in different slots and 777 is near the end; 888 is not in the bank.
+    let filter = json!([555, 777, 888]);
+
+    let first = call(
+        &client,
+        "bank_contents",
+        json!({ "item_ids": filter, "limit": 2 }),
+    )
+    .await;
+    let second = call(
+        &client,
+        "bank_contents",
+        json!({ "item_ids": filter, "limit": 2, "offset": 2 }),
+    )
+    .await;
+
+    let first = first.structured_content.expect("structured content");
+    let second = second.structured_content.expect("structured content");
+    // Matches are counted over the whole bank, before paging.
+    assert_eq!(first["snapshot_rows"], 1_200);
+    assert_eq!(first["total_rows"], 4);
+    assert_eq!(slots(&first), [3, 700]);
+    assert_eq!(first["truncated"], true);
+    // 777 is on a later page, so it is not reported absent; only 888 is.
+    assert_eq!(
+        first["item_filter"]["requested_item_ids"],
+        json!([555, 777, 888])
+    );
+    assert_eq!(first["item_filter"]["unmatched_item_ids"], json!([888]));
+    assert_eq!(second["item_filter"]["unmatched_item_ids"], json!([888]));
+    // The later page holds the third repeat and the match near the end, in file order.
+    assert_eq!(slots(&second), [1_150, 1_190]);
+    assert_eq!(second["rows"][0]["item_id"], 555);
+    assert_eq!(second["rows"][1]["item_id"], 777);
+    assert_eq!(second["truncated"], false);
+}
+
+#[tokio::test]
+async fn an_unfiltered_call_on_a_large_bank_reports_no_filter_section() {
+    let (_dir, source) = source_with(BANK_FILE_NAME, &large_bank_json());
+    let (client, _server) = connect(source).await;
+
+    let result = call(&client, "bank_contents", json!({ "limit": 5 })).await;
+
+    let result = result.structured_content.expect("structured content");
+    assert_eq!(result["total_rows"], 1_200);
+    assert_eq!(result["snapshot_rows"], 1_200);
+    assert_eq!(result["item_filter"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_filter_on_an_empty_bank_is_ok_with_every_id_unmatched() {
+    let (_dir, source) = source_with(BANK_FILE_NAME, &bank_json(0));
+    let (client, _server) = connect(source).await;
+
+    let result = call(&client, "bank_contents", json!({ "item_ids": [1, 2] })).await;
+
+    let result = result.structured_content.expect("structured content");
+    assert_eq!(result["status"], "ok");
+    assert_eq!(
+        (
+            result["total_rows"].as_u64(),
+            result["snapshot_rows"].as_u64()
+        ),
+        (Some(0), Some(0))
+    );
+    assert_eq!(result["item_filter"]["unmatched_item_ids"], json!([1, 2]));
+}
+
+#[tokio::test]
+async fn a_filter_on_a_missing_file_is_still_file_not_found() {
+    let dir = TempDir::with_prefix("osrs-mcp-containers-").unwrap();
+    let (client, _server) = connect(LocalExportSource::new(dir.path().to_path_buf())).await;
+
+    let failure = failure_json(&call(&client, "bank_contents", json!({ "item_ids": [1] })).await);
+
+    assert_eq!(failure["status"], "file_not_found");
+}
+
+#[tokio::test]
+async fn empty_or_oversized_item_id_lists_are_rejected_before_any_read() {
+    let (client, _server) = connect(LocalExportSource::unconfigured()).await;
+    let too_many: Vec<u32> = (1..=51).collect();
+
+    for arguments in [json!({ "item_ids": [] }), json!({ "item_ids": too_many })] {
+        let result = client
+            .call_tool(
+                CallToolRequestParams::new("bank_contents")
+                    .with_arguments(arguments.as_object().cloned().unwrap()),
+            )
+            .await;
+        // The unconfigured source would give `not_configured` if a read happened.
+        let rejected_before_read = match result {
+            Err(_) => true,
+            Ok(result) => {
+                result.is_error == Some(true)
+                    && !result.content[0]
+                        .as_text()
+                        .is_some_and(|text| text.text.contains("not_configured"))
+            }
+        };
+        assert!(rejected_before_read, "{arguments}");
+    }
 }
 
 #[tokio::test]

@@ -38,6 +38,7 @@ use market_data::MarketData;
 pub use character::{CharacterSummary, SkillOutput, SummaryStatus, WarningOutput};
 pub use containers::{
     ContainerContents, ContainerOutput, ContainerRowOutput, ContainerWarningOutput, ContentsStatus,
+    ItemFilterOutput,
 };
 pub use export_output::{
     ExportFailure, ExportedAtOutput, FailureStatus, ObservationTime, UnreadableReason,

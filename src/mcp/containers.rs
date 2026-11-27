@@ -21,6 +21,7 @@ use super::OsrsMcpServer;
 use super::export_output::{
     ExportFailure, ObservationTime, bounded, bounded_name, failure_for, into_result,
 };
+use crate::domain::ItemId;
 use crate::runelite::{
     ContainerKind, ContainerRow, ContainerSnapshot, ContainerWarning, ExportReadError,
 };
@@ -32,15 +33,24 @@ const MAX_LIMIT: usize = 200;
 /// Most warnings returned.
 const MAX_WARNINGS: usize = 64;
 
-/// The page of rows to return.
+/// Most item IDs one `bank_contents` call can ask for.
+const MAX_ITEM_IDS: usize = 50;
+
+/// Arguments of the `bank_contents` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct PageInput {
-    /// Rows to skip, in the order the file lists them. Defaults to 0.
+struct BankInput {
+    /// Rows to skip, in the order the file lists them (after `item_ids` is
+    /// applied, if given). Defaults to 0.
     offset: Option<u32>,
     /// Most rows to return, 1 to 200. Defaults to 100.
     limit: Option<u32>,
+    /// Only rows holding one of these exact item IDs, 1 to 50 IDs. The whole
+    /// bank is searched before `offset` and `limit` apply to the matching
+    /// rows. Requested IDs with no row anywhere in the bank are listed in
+    /// `item_filter.unmatched_item_ids`. Omit to browse every row.
+    item_ids: Option<Vec<u32>>,
 }
 
 /// A validated page.
@@ -50,8 +60,16 @@ struct Page {
     limit: usize,
 }
 
-impl PageInput {
-    fn into_page(self) -> Result<Page, String> {
+/// A validated request: which rows, then which page of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Query {
+    page: Page,
+    /// Requested IDs without repeats, in request order. `None` means no filter.
+    item_ids: Option<Vec<ItemId>>,
+}
+
+impl BankInput {
+    fn into_query(self) -> Result<Query, String> {
         let limit = match self.limit {
             None => DEFAULT_LIMIT,
             Some(limit) => usize::try_from(limit)
@@ -63,8 +81,29 @@ impl PageInput {
             .offset
             .map_or(Ok(0), usize::try_from)
             .map_err(|_| "offset is too large".to_owned())?;
-        Ok(Page { offset, limit })
+        let item_ids = self.item_ids.map(distinct_item_ids).transpose()?;
+        Ok(Query {
+            page: Page { offset, limit },
+            item_ids,
+        })
     }
+}
+
+/// The requested IDs without repeats, in request order. A repeat is harmless
+/// and ignored; an empty or oversized list is not.
+fn distinct_item_ids(requested: Vec<u32>) -> Result<Vec<ItemId>, String> {
+    if !(1..=MAX_ITEM_IDS).contains(&requested.len()) {
+        return Err(format!(
+            "item_ids must list between 1 and {MAX_ITEM_IDS} item ids"
+        ));
+    }
+    let mut ids: Vec<ItemId> = Vec::with_capacity(requested.len());
+    for id in requested.into_iter().map(ItemId) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
 }
 
 /// Success marker, so a client can tell results apart by `status` alone.
@@ -121,6 +160,17 @@ pub enum ContainerWarningOutput {
     },
 }
 
+/// The outcome of an `item_ids` filter, computed over the whole snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ItemFilterOutput {
+    /// The requested item IDs, without repeats, in request order.
+    pub requested_item_ids: Vec<u32>,
+    /// Requested IDs with no row anywhere in the snapshot. An ID that matches
+    /// a row on another page is not listed here.
+    pub unmatched_item_ids: Vec<u32>,
+}
+
 /// Successful result of a container tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -133,11 +183,17 @@ pub struct ContainerContents {
     /// are not guaranteed to be consistent with this one.
     #[serde(flatten)]
     pub observed: ObservationTime,
-    /// The requested page, in the order the file lists the rows. Repeated item
-    /// IDs are separate rows and are not merged.
+    /// The requested page of matching rows, in the order the file lists them.
+    /// Repeated item IDs are separate rows and are not merged.
     pub rows: Vec<ContainerRowOutput>,
-    /// Rows in the whole file. An empty container reports 0 with status `ok`.
+    /// Rows the page is taken from: every row in the file, or with an
+    /// `item_ids` filter every row holding a requested ID, counted before
+    /// paging. An empty container reports 0 with status `ok`.
     pub total_rows: usize,
+    /// Rows in the whole file, whatever the filter.
+    pub snapshot_rows: usize,
+    /// Present with an `item_ids` filter, otherwise null.
+    pub item_filter: Option<ItemFilterOutput>,
     /// Rows skipped before this page.
     pub offset: usize,
     /// The page size applied.
@@ -160,13 +216,19 @@ impl OsrsMcpServer {
         description = "Read the player's bank from the local RuneLite Character Exporter file \
                        configured for this server: item ids, quantities and optional display \
                        names per slot, with the exporter timestamp and import warnings. Reads \
-                       the file on every call. Paginated with offset and limit (default 100, \
-                       at most 200 rows). The timestamp is the last change to the bank file, \
-                       not the time of reading, and the exporter only writes the bank after it \
-                       has been opened, so the file can be sessions old. A missing file is \
-                       reported as file_not_found, never as an empty bank. Does not price \
-                       items or total their value, and is not consistent with any other \
-                       export file. Failures report a status such as not_configured or \
+                       the file on every call. Browse with offset and limit (default 100, at \
+                       most 200 rows), or pass item_ids (1 to 50 exact item ids) to get only \
+                       the rows holding those items: the whole bank is searched first, then \
+                       offset and limit apply to the matching rows, every matching slot is \
+                       returned in file order, and item_filter.unmatched_item_ids lists \
+                       requested ids that appear nowhere in the bank. total_rows counts rows \
+                       before paging and snapshot_rows counts the whole bank. The timestamp is \
+                       the last change to the bank file, not the time of reading, and the \
+                       exporter only writes the bank after it has been opened, so the file can \
+                       be sessions old. A missing file is reported as file_not_found, never as \
+                       an empty bank. Does not price items or total their value, and is not \
+                       consistent with any other export file. Resolve item names with \
+                       item_search. Failures report a status such as not_configured or \
                        file_not_found.",
         annotations(
             title = "Bank contents",
@@ -179,12 +241,12 @@ impl OsrsMcpServer {
     )]
     async fn bank_contents(
         &self,
-        Parameters(input): Parameters<PageInput>,
+        Parameters(input): Parameters<BankInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let page = input
-            .into_page()
+        let query = input
+            .into_query()
             .map_err(|message| ErrorData::invalid_params(message, None))?;
-        self.container_result(ContainerKind::Bank, page).await
+        self.container_result(ContainerKind::Bank, query).await
     }
 }
 
@@ -193,7 +255,7 @@ impl OsrsMcpServer {
     async fn container_result(
         &self,
         kind: ContainerKind,
-        page: Page,
+        query: Query,
     ) -> Result<CallToolResult, ErrorData> {
         let source = self.export_source.clone();
         let read = tokio::task::spawn_blocking(move || source.read_container(kind))
@@ -202,7 +264,7 @@ impl OsrsMcpServer {
 
         // One clock sample, taken after the read, serves both `read_at` and the age.
         let outcome = read
-            .map(|snapshot| contents(&snapshot, page, Timestamp::now()))
+            .map(|snapshot| contents(&snapshot, &query, Timestamp::now()))
             .map_err(|error| container_failure(&error, kind));
         into_result(outcome)
     }
@@ -214,28 +276,57 @@ fn container_failure(error: &ExportReadError, kind: ContainerKind) -> ExportFail
 }
 
 /// Builds the response for a parsed snapshot, read at `read_at`.
-fn contents(snapshot: &ContainerSnapshot, page: Page, read_at: Timestamp) -> ContainerContents {
-    let rows = snapshot.rows();
+fn contents(snapshot: &ContainerSnapshot, query: &Query, read_at: Timestamp) -> ContainerContents {
     let (warnings, warning_count) = bounded(snapshot.warnings(), MAX_WARNINGS, warning_output);
-    let shown: Vec<ContainerRowOutput> = rows
+    // Filtering looks at every row; the page is taken afterwards, so a match
+    // on a later page can never be reported as absent.
+    let matching = matching_rows(snapshot.rows(), query.item_ids.as_deref());
+    let page = query.page;
+    let shown: Vec<ContainerRowOutput> = matching
         .iter()
         .skip(page.offset)
         .take(page.limit)
-        .map(row_output)
+        .map(|row| row_output(row))
         .collect();
 
     ContainerContents {
         status: ContentsStatus::Ok,
         container: container_output(snapshot.kind()),
         observed: ObservationTime::new(snapshot.exported_at(), snapshot.plugin_version(), read_at),
-        truncated: page.offset.saturating_add(shown.len()) < rows.len(),
+        truncated: page.offset.saturating_add(shown.len()) < matching.len(),
         rows: shown,
-        total_rows: rows.len(),
+        total_rows: matching.len(),
+        snapshot_rows: snapshot.rows().len(),
+        item_filter: query
+            .item_ids
+            .as_deref()
+            .map(|requested| item_filter_output(requested, &matching)),
         offset: page.offset,
         limit: page.limit,
         warnings_truncated: warning_count > warnings.len(),
         warnings,
         warning_count,
+    }
+}
+
+/// The rows to page through, in file order: all of them, or those holding a
+/// requested item ID.
+fn matching_rows<'a>(
+    rows: &'a [ContainerRow],
+    item_ids: Option<&[ItemId]>,
+) -> Vec<&'a ContainerRow> {
+    rows.iter()
+        .filter(|row| item_ids.is_none_or(|ids| ids.contains(&row.item_id)))
+        .collect()
+}
+
+fn item_filter_output(requested: &[ItemId], matching: &[&ContainerRow]) -> ItemFilterOutput {
+    let unmatched = requested
+        .iter()
+        .filter(|id| !matching.iter().any(|row| row.item_id == **id));
+    ItemFilterOutput {
+        requested_item_ids: requested.iter().map(|id| id.0).collect(),
+        unmatched_item_ids: unmatched.map(|id| id.0).collect(),
     }
 }
 
@@ -296,15 +387,18 @@ mod tests {
         parse_container_export(ContainerKind::Bank, json.as_bytes()).unwrap()
     }
 
-    fn page(offset: usize, limit: usize) -> Page {
-        Page { offset, limit }
+    fn page(offset: usize, limit: usize) -> Query {
+        Query {
+            page: Page { offset, limit },
+            item_ids: None,
+        }
     }
 
     #[test]
     fn a_synthetic_bank_is_reported_with_both_timestamps_and_in_file_order() {
         let snapshot = parse_container_export(ContainerKind::Bank, BANK).unwrap();
 
-        let result = contents(&snapshot, page(0, 100), ts("2026-01-01T12:01:00Z"));
+        let result = contents(&snapshot, &page(0, 100), ts("2026-01-01T12:01:00Z"));
 
         assert_eq!(result.status, ContentsStatus::Ok);
         assert_eq!(result.container, ContainerOutput::Bank);
@@ -320,7 +414,7 @@ mod tests {
 
     #[test]
     fn repeated_item_ids_stay_separate_rows() {
-        let result = contents(&bank_with_rows(3), page(0, 10), ts("2026-01-01T12:00:00Z"));
+        let result = contents(&bank_with_rows(3), &page(0, 10), ts("2026-01-01T12:00:00Z"));
 
         let quantities: Vec<(u32, u64)> = result
             .rows
@@ -335,9 +429,9 @@ mod tests {
         let snapshot = bank_with_rows(5);
         let now = ts("2026-01-01T12:00:00Z");
 
-        let first = contents(&snapshot, page(0, 2), now);
-        let middle = contents(&snapshot, page(2, 2), now);
-        let last = contents(&snapshot, page(4, 2), now);
+        let first = contents(&snapshot, &page(0, 2), now);
+        let middle = contents(&snapshot, &page(2, 2), now);
+        let last = contents(&snapshot, &page(4, 2), now);
 
         assert_eq!(
             first.rows.iter().map(|row| row.slot).collect::<Vec<_>>(),
@@ -359,7 +453,7 @@ mod tests {
 
     #[test]
     fn a_page_exactly_covering_the_rest_is_not_truncated() {
-        let result = contents(&bank_with_rows(4), page(2, 2), ts("2026-01-01T12:00:00Z"));
+        let result = contents(&bank_with_rows(4), &page(2, 2), ts("2026-01-01T12:00:00Z"));
 
         assert_eq!(result.rows.len(), 2);
         assert!(!result.truncated);
@@ -367,7 +461,7 @@ mod tests {
 
     #[test]
     fn an_offset_past_the_end_is_an_empty_page_not_a_failure() {
-        let result = contents(&bank_with_rows(3), page(10, 5), ts("2026-01-01T12:00:00Z"));
+        let result = contents(&bank_with_rows(3), &page(10, 5), ts("2026-01-01T12:00:00Z"));
 
         assert_eq!(result.rows, []);
         assert_eq!(result.total_rows, 3);
@@ -382,7 +476,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = contents(&snapshot, page(0, 100), ts("2026-01-01T12:00:00Z"));
+        let result = contents(&snapshot, &page(0, 100), ts("2026-01-01T12:00:00Z"));
 
         assert_eq!((result.status, result.total_rows), (ContentsStatus::Ok, 0));
         assert_eq!(result.rows, []);
@@ -400,7 +494,7 @@ mod tests {
         );
         let snapshot = parse_container_export(ContainerKind::Bank, json.as_bytes()).unwrap();
 
-        let result = contents(&snapshot, page(0, 10), ts("2026-01-01T12:00:00Z"));
+        let result = contents(&snapshot, &page(0, 10), ts("2026-01-01T12:00:00Z"));
 
         assert_eq!(
             (
@@ -436,7 +530,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = contents(&snapshot, page(0, 10), ts("2026-01-01T12:00:00Z"));
+        let result = contents(&snapshot, &page(0, 10), ts("2026-01-01T12:00:00Z"));
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.warnings, [ContainerWarningOutput::ItemCountMismatch]);
@@ -446,49 +540,163 @@ mod tests {
 
     #[test]
     fn a_future_export_time_gives_no_age() {
-        let result = contents(&bank_with_rows(1), page(0, 10), ts("2025-12-31T00:00:00Z"));
+        let result = contents(&bank_with_rows(1), &page(0, 10), ts("2025-12-31T00:00:00Z"));
 
         assert_eq!(result.observed.seconds_since_last_change, None);
         assert!(result.observed.exported_at_in_future);
     }
 
-    #[test]
-    fn omitted_paging_uses_the_defaults() {
-        let page = PageInput {
-            offset: None,
-            limit: None,
+    fn input(offset: Option<u32>, limit: Option<u32>, item_ids: Option<Vec<u32>>) -> BankInput {
+        BankInput {
+            offset,
+            limit,
+            item_ids,
         }
-        .into_page();
+    }
+
+    #[test]
+    fn omitted_arguments_browse_the_first_default_page() {
+        let query = input(None, None, None).into_query();
 
         assert_eq!(
-            page,
-            Ok(Page {
-                offset: 0,
-                limit: DEFAULT_LIMIT
+            query,
+            Ok(Query {
+                page: Page {
+                    offset: 0,
+                    limit: DEFAULT_LIMIT
+                },
+                item_ids: None
             })
         );
     }
 
     #[test]
     fn limits_outside_one_to_the_maximum_are_rejected() {
-        for limit in [0, u32::try_from(MAX_LIMIT).unwrap() + 1, u32::MAX] {
-            let input = PageInput {
-                offset: None,
-                limit: Some(limit),
-            };
-            assert!(input.into_page().is_err(), "limit {limit}");
+        let over = u32::try_from(MAX_LIMIT).unwrap() + 1;
+        for limit in [0, over, u32::MAX] {
+            assert!(
+                input(None, Some(limit), None).into_query().is_err(),
+                "limit {limit}"
+            );
         }
-        let at_max = PageInput {
-            offset: Some(3),
-            limit: Some(u32::try_from(MAX_LIMIT).unwrap()),
-        };
+        let at_max = input(Some(3), Some(over - 1), None).into_query();
         assert_eq!(
-            at_max.into_page(),
-            Ok(Page {
-                offset: 3,
-                limit: MAX_LIMIT
+            at_max,
+            Ok(Query {
+                page: Page {
+                    offset: 3,
+                    limit: MAX_LIMIT
+                },
+                item_ids: None
             })
         );
+    }
+
+    #[test]
+    fn item_id_lists_are_bounded_and_repeats_are_ignored() {
+        assert!(input(None, None, Some(vec![])).into_query().is_err());
+        let too_many: Vec<u32> = (1..=u32::try_from(MAX_ITEM_IDS).unwrap() + 1).collect();
+        assert!(input(None, None, Some(too_many)).into_query().is_err());
+        let at_max: Vec<u32> = (1..=u32::try_from(MAX_ITEM_IDS).unwrap()).collect();
+        assert!(input(None, None, Some(at_max)).into_query().is_ok());
+
+        let query = input(None, None, Some(vec![7, 3, 7, 3, 9]))
+            .into_query()
+            .unwrap();
+
+        assert_eq!(query.item_ids, Some(vec![ItemId(7), ItemId(3), ItemId(9)]));
+    }
+
+    /// A bank of items 10, 20, 10, 30, 20, 10 in slots 0 to 5.
+    fn mixed_bank() -> ContainerSnapshot {
+        let rows: Vec<String> = [10, 20, 10, 30, 20, 10]
+            .iter()
+            .enumerate()
+            .map(|(slot, id)| format!(r#"{{"slot":{slot},"id":{id},"quantity":1}}"#))
+            .collect();
+        let json = format!(
+            r#"{{"exported_at":"2026-01-01T12:00:00Z","kind":"bank","item_count":6,"items":[{}]}}"#,
+            rows.join(",")
+        );
+        parse_container_export(ContainerKind::Bank, json.as_bytes()).unwrap()
+    }
+
+    fn filtered(ids: &[u32], offset: usize, limit: usize) -> ContainerContents {
+        let query = Query {
+            page: Page { offset, limit },
+            item_ids: Some(ids.iter().copied().map(ItemId).collect()),
+        };
+        contents(&mixed_bank(), &query, ts("2026-01-01T12:00:00Z"))
+    }
+
+    #[test]
+    fn a_filter_keeps_every_matching_slot_in_file_order() {
+        let result = filtered(&[10, 30], 0, 100);
+
+        let slots: Vec<(u16, u32)> = result
+            .rows
+            .iter()
+            .map(|row| (row.slot, row.item_id))
+            .collect();
+        assert_eq!(slots, [(0, 10), (2, 10), (3, 30), (5, 10)]);
+        assert_eq!((result.total_rows, result.snapshot_rows), (4, 6));
+        assert!(!result.truncated);
+    }
+
+    #[test]
+    fn filtered_paging_applies_to_the_matching_rows() {
+        let result = filtered(&[10], 1, 1);
+
+        assert_eq!(
+            result.rows.iter().map(|row| row.slot).collect::<Vec<_>>(),
+            [2]
+        );
+        assert_eq!(result.total_rows, 3);
+        assert!(result.truncated);
+    }
+
+    #[test]
+    fn an_id_matching_only_beyond_the_page_is_not_reported_absent() {
+        // Item 30 sits in slot 3, after the one row (item 20, slot 1) this page shows.
+        let result = filtered(&[30, 20], 0, 1);
+
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .map(|row| row.item_id)
+                .collect::<Vec<_>>(),
+            [20]
+        );
+        assert!(result.truncated);
+        let filter = result.item_filter.unwrap();
+        assert_eq!(filter.unmatched_item_ids, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn requested_ids_with_no_row_anywhere_are_reported_in_request_order() {
+        let result = filtered(&[99, 30, 98], 0, 100);
+
+        let filter = result.item_filter.unwrap();
+        assert_eq!(filter.requested_item_ids, [99, 30, 98]);
+        assert_eq!(filter.unmatched_item_ids, [99, 98]);
+    }
+
+    #[test]
+    fn a_filter_matching_nothing_is_ok_not_an_empty_bank() {
+        let result = filtered(&[99], 0, 100);
+
+        assert_eq!(result.rows, []);
+        assert_eq!((result.total_rows, result.snapshot_rows), (0, 6));
+        assert_eq!(result.item_filter.unwrap().unmatched_item_ids, [99]);
+    }
+
+    #[test]
+    fn an_unfiltered_response_has_no_filter_section() {
+        let result = contents(&mixed_bank(), &page(0, 100), ts("2026-01-01T12:00:00Z"));
+
+        assert_eq!(result.item_filter, None);
+        assert_eq!(result.total_rows, result.snapshot_rows);
     }
 
     #[test]
