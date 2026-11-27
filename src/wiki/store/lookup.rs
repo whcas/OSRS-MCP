@@ -1,9 +1,14 @@
 //! Exact-title lookup and redirect resolution over the stored pages.
 //!
-//! Titles are compared as the wiki compares them, no more: runs of spaces and
-//! underscores are one space, and a `#fragment` is not part of a name. Case is
-//! kept, so `axe` does not find `Axe`; guessing capitalisation would be a
-//! substitution, not a lookup. Nothing here reads text or expands templates.
+//! Titles are compared as `MediaWiki` compares them, no more: runs of spaces
+//! and underscores are one space, a `#fragment` is not part of a name, and the
+//! first letter is case-insensitive (`MediaWiki`'s `first-letter` rule, which
+//! the default configuration and the exports this crate reads use). The same
+//! [`title_key`] is computed for stored titles when a page is written and for
+//! requested titles and redirect targets when they are looked up, so every
+//! spelling of a title meets every other; the raw title is kept for display
+//! and citation. The rest of a title is case-sensitive, so `AXE` does not find
+//! `Axe`. Nothing here reads text or expands templates.
 
 use rusqlite::{Connection, params};
 
@@ -139,7 +144,7 @@ fn find_by_title(
     source_key: i64,
     title: &str,
 ) -> Result<TitleMatch, StoreError> {
-    let key = comparison_form(title);
+    let key = title_key(title);
     if key.is_empty() {
         return Ok(TitleMatch::Absent);
     }
@@ -158,7 +163,9 @@ fn page_ids_titled(
     title: &str,
 ) -> Result<Vec<PageId>, StoreError> {
     let mut statement = connection
-        .prepare("SELECT page_id FROM page WHERE source_id = ?1 AND title = ?2 ORDER BY page_id")
+        .prepare(
+            "SELECT page_id FROM page WHERE source_id = ?1 AND title_key = ?2 ORDER BY page_id",
+        )
         .map_err(StoreError::database(Operation::Read))?;
     let rows = statement
         .query_map(params![source_key, title], |row| row.get::<_, i64>(0))
@@ -175,14 +182,34 @@ fn page_ids_titled(
     .collect()
 }
 
-/// A title as stored pages are compared: without a `#fragment`, with every run
-/// of spaces and underscores as one space and none at the ends.
-fn comparison_form(title: &str) -> String {
+/// The form in which titles are compared: without a `#fragment`, with every
+/// run of spaces and underscores as one space and none at the ends, and with
+/// the first letter in upper case when that is a single character.
+///
+/// Only the first character of the whole title is folded. A lower-case first
+/// letter after a namespace prefix (`Category:foo`) is not, because a prefix
+/// cannot be told from a colon in a main-namespace title without the source's
+/// namespace list.
+pub(super) fn title_key(title: &str) -> String {
     let name = title.split('#').next().unwrap_or_default();
-    name.split(|character: char| character == '_' || character.is_whitespace())
+    let spaced = name
+        .split(|character: char| character == '_' || character.is_whitespace())
         .filter(|word| !word.is_empty())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    let mut characters = spaced.chars();
+    let Some(first) = characters.next() else {
+        return spaced;
+    };
+    let mut upper = first.to_uppercase();
+    match (upper.next(), upper.next()) {
+        (Some(single), None) => {
+            let mut key = String::from(single);
+            key.push_str(characters.as_str());
+            key
+        }
+        _ => spaced,
+    }
 }
 
 #[cfg(test)]
@@ -214,14 +241,19 @@ mod tests {
     }
 
     #[test]
-    fn comparison_form_normalises_spacing_and_drops_fragments_only() {
-        assert_eq!(comparison_form("Dragon_axe"), "Dragon axe");
-        assert_eq!(comparison_form("  Dragon \t__ axe  "), "Dragon axe");
-        assert_eq!(comparison_form("Bank#Notes"), "Bank");
-        assert_eq!(comparison_form("Category:Tools"), "Category:Tools");
-        assert_eq!(comparison_form("axe"), "axe");
-        assert_eq!(comparison_form("#Local"), "");
-        assert_eq!(comparison_form(" _ "), "");
+    fn x() {
+        assert_eq!(title_key("Dragon_axe"), "Dragon axe");
+        assert_eq!(title_key("  Dragon \t__ axe  "), "Dragon axe");
+        assert_eq!(title_key("Bank#Notes"), "Bank");
+        assert_eq!(title_key("Category:Tools"), "Category:Tools");
+        assert_eq!(title_key("axe"), "Axe");
+        assert_eq!(title_key("aXE"), "AXE");
+        assert_eq!(title_key("élan vital"), "Élan vital");
+        assert_eq!(title_key("ßeta"), "ßeta");
+        assert_eq!(title_key("1 axe"), "1 axe");
+        assert_eq!(title_key("Category:foo"), "Category:foo");
+        assert_eq!(title_key("#Local"), "");
+        assert_eq!(title_key(" _ "), "");
     }
 
     #[test]
@@ -251,10 +283,14 @@ mod tests {
     }
 
     #[test]
-    fn titles_are_case_sensitive_and_never_guessed() {
+    fn only_the_first_letter_is_case_insensitive() {
         let fixture = Fixture::new();
         let store = store_with(&fixture, &[titled(1, "Axe")]);
-        for query in ["axe", "AXE", "Ax", "Axe s", "", "#Axe"] {
+        assert!(matches!(
+            store.page_by_title(&fixture.source, "axe").unwrap(),
+            TitleMatch::Unique(_)
+        ));
+        for query in ["AXE", "aXe", "Ax", "Axe s", "", "#Axe"] {
             assert!(
                 matches!(
                     store.page_by_title(&fixture.source, query).unwrap(),
@@ -263,6 +299,41 @@ mod tests {
                 "{query}"
             );
         }
+    }
+
+    #[test]
+    fn a_stored_title_that_needs_normalising_is_found_by_every_spelling() {
+        let fixture = Fixture::new();
+        let store = store_with(&fixture, &[titled(1, "dragon__axe  (item)")]);
+        for query in [
+            "dragon__axe  (item)",
+            "Dragon axe (item)",
+            "dragon_axe_(item)",
+            " Dragon  axe (item)#Uses",
+        ] {
+            let TitleMatch::Unique(found) = store.page_by_title(&fixture.source, query).unwrap()
+            else {
+                panic!("{query:?} should find the page");
+            };
+            // The raw title is kept for display and citation.
+            assert_eq!(found.title.as_str(), "dragon__axe  (item)");
+        }
+    }
+
+    #[test]
+    fn redirects_and_targets_meet_whatever_their_spelling() {
+        let fixture = Fixture::new();
+        let store = store_with(
+            &fixture,
+            &[
+                redirect(1, "old_name", "new__name#Section"),
+                titled(2, "new name"),
+            ],
+        );
+        assert!(matches!(
+            store.resolve(&fixture.source, "Old name").unwrap(),
+            Resolution::Found { page, redirects } if page.id == page_id(2) && redirects.len() == 1
+        ));
     }
 
     #[test]
@@ -312,6 +383,16 @@ mod tests {
         assert!(matches!(
             store.resolve(&fixture.source, "Axe").unwrap(),
             Resolution::Ambiguous { redirects, .. } if redirects.is_empty()
+        ));
+    }
+
+    #[test]
+    fn titles_that_differ_only_in_the_first_letter_are_ambiguous_not_merged() {
+        let fixture = Fixture::new();
+        let store = store_with(&fixture, &[titled(1, "Axe"), titled(2, "axe")]);
+        assert!(matches!(
+            store.page_by_title(&fixture.source, "Axe").unwrap(),
+            TitleMatch::Ambiguous(pages) if ids(&pages) == [1, 2]
         ));
     }
 
