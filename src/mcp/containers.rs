@@ -1,5 +1,5 @@
-//! The `bank_contents` tool: bank holdings from the local Character Exporter
-//! file.
+//! The `bank_contents` and `equipment_contents` tools: item rows from the local
+//! Character Exporter files.
 //!
 //! This module only adapts. Reading is [`LocalExportSource`](crate::runelite::LocalExportSource)
 //! and parsing is [`parse_container_export`](crate::runelite::parse_container_export);
@@ -247,6 +247,39 @@ impl OsrsMcpServer {
             .into_query()
             .map_err(|message| ErrorData::invalid_params(message, None))?;
         self.container_result(ContainerKind::Bank, query).await
+    }
+
+    /// Reports equipped items from the local Character Exporter file.
+    #[tool(
+        name = "equipment_contents",
+        description = "Read the player's equipped items from the local RuneLite Character \
+                       Exporter file configured for this server: item ids, quantities and \
+                       optional display names per equipment slot, with the exporter timestamp \
+                       and import warnings. Reads the file on every call. An observed empty \
+                       equipment file is a valid result with no rows; a missing file is \
+                       reported as file_not_found. The timestamp is the last change to the \
+                       equipment file, not the time of reading, and the file is not consistent \
+                       with any other export file. Does not price items or total their value. \
+                       Failures report a status such as not_configured or file_not_found.",
+        annotations(
+            title = "Equipment contents",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        output_schema = schema_for_output::<ContainerContents>()
+    )]
+    async fn equipment_contents(&self) -> Result<CallToolResult, ErrorData> {
+        // A character has at most 14 equipment slots, so one page holds them all.
+        let query = Query {
+            page: Page {
+                offset: 0,
+                limit: MAX_LIMIT,
+            },
+            item_ids: None,
+        };
+        self.container_result(ContainerKind::Equipment, query).await
     }
 }
 
@@ -704,5 +737,38 @@ mod tests {
         let failure = container_failure(&ExportReadError::FileNotFound, ContainerKind::Bank);
 
         assert!(failure.message.contains("bank.json"), "{}", failure.message);
+    }
+
+    #[test]
+    fn equipment_rows_report_slots_and_unknown_slots_warn() {
+        let snapshot = parse_container_export(
+            ContainerKind::Equipment,
+            br#"{"exported_at":"2026-01-01T12:00:00Z","kind":"equipment","item_count":2,
+                "items":[{"slot":3,"id":4151,"quantity":1},{"slot":99,"id":1,"quantity":1}]}"#,
+        )
+        .unwrap();
+
+        let result = contents(&snapshot, &page(0, MAX_LIMIT), ts("2026-01-01T12:00:00Z"));
+
+        assert_eq!(result.container, ContainerOutput::Equipment);
+        assert_eq!(
+            result.rows.iter().map(|row| row.slot).collect::<Vec<_>>(),
+            [3, 99]
+        );
+        assert_eq!(
+            result.warnings,
+            [ContainerWarningOutput::UnknownEquipmentSlot { row: 2 }]
+        );
+    }
+
+    #[test]
+    fn equipment_failures_name_the_equipment_file() {
+        let failure = container_failure(&ExportReadError::FileNotFound, ContainerKind::Equipment);
+
+        assert!(
+            failure.message.contains("equipment.json"),
+            "{}",
+            failure.message
+        );
     }
 }

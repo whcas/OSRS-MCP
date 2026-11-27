@@ -76,3 +76,11 @@ Read-only. Reads `bank.json` on each call and returns one page of rows. Input (a
 - No prices, valuation or totals; no account name, world, session id, path or raw JSON.
 
 Failures use the same fixed statuses as `character_summary`, with messages naming `bank.json`.
+
+## The `equipment_contents` tool
+
+Read-only, no input. Reads `equipment.json` on each call and returns the same row shape, timing fields, warnings and failure statuses as `bank_contents`, without paging (a character has at most 14 equipment slots; `slot` is the exporter's index, and a row outside the documented 0 to 13 range produces an `unknown_equipment_slot` warning with the row's position).
+
+- An observed empty equipment file is `status: ok` with no rows, which is a valid state. A missing `equipment.json` is `file_not_found`, never "nothing equipped".
+- Equipment is a separate observation with its own `exported_at`; it is not guaranteed consistent with the bank or inventory files.
+- No prices, valuation or totals; no account name, world, session id, path or raw JSON.
