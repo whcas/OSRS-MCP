@@ -8,6 +8,7 @@ repository = "https://github.com/whcas/OSRS-MCP"
 publish = false
 
 [dependencies]
+quick-xml = "0.42"
 # HTTP client for the Hardcore prices API. Default features are disabled: only
 # the rustls TLS backend is needed, and bodies are parsed by this crate.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
