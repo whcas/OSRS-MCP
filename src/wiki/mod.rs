@@ -30,7 +30,8 @@ pub use sections::{
     SectionId, SectionPath, prepare,
 };
 pub use store::{
-    ImportSession, ImportSummary, Operation, PageOutcome, Resolution, Store, StoreError,
-    StoredChunk, StoredPage, TitleMatch,
+    ImportSession, ImportSummary, InvalidSearch, MAX_QUERY_BYTES, MAX_QUERY_TERMS, MAX_RESULTS,
+    Operation, PageOutcome, Resolution, SearchHit, SearchQuery, Store, StoreError, StoredChunk,
+    StoredPage, TitleMatch,
 };
 pub use timestamp::{InvalidTimestamp, RevisionTimestamp};

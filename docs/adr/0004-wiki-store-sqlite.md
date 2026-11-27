@@ -16,6 +16,7 @@ Issue #34 persists manually imported pages and their chunks so that later change
 - **Only the current revision of a page is kept**, keyed by source and `MediaWiki` page id, with its chunks. A newer revision id replaces it in the same transaction; the same revision with the same content is a no-op; an older or conflicting revision is a typed error. Pages missing from a later export are never deleted.
 - **Source identity is the export header's site name, database name and base URL.** It is unverified provenance, so two files that name themselves differently are different sources.
 - **The database path is always the caller's choice.** The library has no default location, and nothing is written inside the repository.
+- **Search uses a contentless FTS5 table (schema version 2)** over title, section path and chunk wikitext, so the text is not stored a third time. Its row ids are the chunk's, which needed `chunk` rebuilt with an `INTEGER PRIMARY KEY` (the version 1 composite key gives no stable row id across `VACUUM`). Triggers keep the index in step with `chunk`, so no write path can forget it. User words are quoted as literal terms, never passed as FTS syntax; results are ordered by `bm25` with equal column weights, then page id, section index and chunk index, within fixed query and result bounds.
 - **`tempfile` (dev only)** supplies temporary database files for tests, so tests exercise the same file-backed code path as production.
 
 ## Alternatives considered
@@ -28,6 +29,7 @@ Issue #34 persists manually imported pages and their chunks so that later change
 ## Consequences
 
 - One new direct dependency, which builds a C library (about two minutes on a cold cache), plus `libsqlite3-sys` and small helpers. `cargo deny` passes; no new duplicate-version warnings were added.
+- The index is built from raw wikitext, so template and parameter names are searchable and ranked like prose; a hit reports its chunk kind so callers can tell. Column weights are unmeasured defaults to be tuned against the evaluation dataset.
 - Page text is stored twice, as the raw revision and again inside its chunks, so that retrieval never has to re-slice. Size is bounded by the import limits.
 - A partly stale export is all-or-nothing by default. A caller that wants to keep the fresh pages must import them again without the stale ones.
 
