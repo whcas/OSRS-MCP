@@ -1,9 +1,9 @@
 //! Import of `RuneLite` account exports.
 //!
 //! Supports `character.json` ([`parse_character_export`]), bank, inventory and
-//! equipment exports ([`parse_container_export`]) and `quests.json`
-//! ([`parse_quest_export`]) from the Character State Exporter plugin. The
-//! formats are recorded in `docs/research/`.
+//! equipment exports ([`parse_container_export`]), `quests.json`
+//! ([`parse_quest_export`]) and diary progress ([`parse_diary_export`]) from the
+//! Character State Exporter plugin. The formats are recorded in `docs/research/`.
 //!
 //! The parser reads bytes it is given. It performs no file or network I/O and
 //! has no knowledge of where exports live, so it works on synthetic fixtures
@@ -12,6 +12,7 @@
 
 mod character;
 mod container;
+mod diary;
 mod experience;
 mod quest;
 mod skill;
@@ -26,6 +27,10 @@ pub use container::{
     ContainerKind, ContainerParseError, ContainerRow, ContainerSnapshot, ContainerWarning,
     MAX_CONTAINER_EXPORT_BYTES, MAX_CONTAINER_ROWS, parse_container_export,
 };
+pub use diary::{
+    DiaryArea, DiaryParseError, DiaryProgress, DiaryTask, DiaryTier, DiaryTierProgress,
+    DiaryWarning, MAX_DIARY_EXPORT_BYTES, parse_diary_export,
+};
 pub use experience::{MAX_EXPERIENCE, MAX_LEVEL, level_for_experience};
 pub use quest::{
     MAX_QUEST_EXPORT_BYTES, MAX_QUEST_ROWS, QuestParseError, QuestProgress, QuestRecord,
@@ -35,6 +40,6 @@ pub use skill::Skill;
 pub use source::{
     BANK_FILE_NAME, CHARACTER_FILE_NAME, EQUIPMENT_FILE_NAME, EXPORT_DIR_VAR, ExportReadError,
     INVENTORY_FILE_NAME, LocalExportSource, MAX_CHARACTER_EXPORT_BYTES, ParseFailure,
-    container_file_name,
+    QUEST_FILE_NAME, container_file_name,
 };
 pub use timestamp::ExportedAt;

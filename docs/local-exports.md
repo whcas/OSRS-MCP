@@ -21,12 +21,13 @@ Set one optional environment variable in the MCP client's server configuration:
 
 ## What is read, and limits
 
-- Only the fixed file names `character.json`, `bank.json`, `inventory.json` and `equipment.json`. Callers cannot pass a path, and no other file in the directory is opened.
-- At most 256 KiB for `character.json` (`MAX_CHARACTER_EXPORT_BYTES`; a real file is a few kilobytes) and at most `MAX_CONTAINER_EXPORT_BYTES` (4 MiB, the container parser's own limit) for each container file. Larger files are rejected without being parsed.
+- Only the fixed file names `character.json`, `bank.json`, `inventory.json`, `equipment.json` and `quests.json`. Callers cannot pass a path, and no other file in the directory is opened.
+- At most 256 KiB for `character.json` (`MAX_CHARACTER_EXPORT_BYTES`; a real file is a few kilobytes) at most `MAX_CONTAINER_EXPORT_BYTES` (4 MiB) for each container file and at most `MAX_QUEST_EXPORT_BYTES` (1 MiB) for `quests.json`; the last two are the parsers' own limits. Larger files are rejected without being parsed.
 - Only a regular file: a directory, or a named pipe, with a supported file name is refused. Symbolic links are followed, because the directory is your own.
 - **Trusted directory assumption.** The file type is checked just before the file is opened. That guards against a mistaken file, not against someone who can modify the directory concurrently (for example replacing the file with a named pipe between the check and the open). The directory is the plugin's own, user-owned folder and is assumed not to be modified adversarially. Hardened handling would need platform-specific code and is not provided.
 - Every call reads the file again. There is no cache, file watcher, polling or background work.
 - Container files are read with `LocalExportSource::read_container`. A missing container file is `FileNotFound`, never an empty container: the exporter writes a container only after observing it, and an old file can remain from an earlier session. An observed empty container is a valid snapshot with no rows.
+- `quests.json` is read with `LocalExportSource::read_quests`. A missing file is `FileNotFound`, never "no quest started", and a quest absent from a valid file is unrecorded rather than not started.
 - Each file has its own `exported_at`. Reads of different files are separate observations, not one consistent snapshot of the account.
 - Parsing is `parse_character_export`; warnings and `exported_at` are preserved. `exported_at` is the time of the last change to the exported data, not the time of the read or a sign that the player is online.
 
@@ -61,3 +62,25 @@ Never returned: account name, world, world types, session id, boosted levels, pa
 A failure is an error result (`isError: true`) whose text is JSON with a fixed `status`: `not_configured`, `directory_unavailable`, `file_not_found`, `unreadable` (with `reason`: `not_a_regular_file`, `too_large`, `permission_denied` or `io_error`) or `invalid_export`. `invalid_export` adds `retryable` (true when the file ended unexpectedly, which may be a write in progress but is not proof of one) and a `detail` that never quotes the file. There is no stale fallback.
 
 Example prompt once configured: "Show my skill levels and tell me how old the export is."
+
+## The `bank_contents` tool
+
+Read-only. Reads `bank.json` on each call and returns one page of rows. Input (all optional): `offset` (rows to skip, default 0), `limit` (1 to 200, default 100) and `item_ids` (1 to 50 exact item IDs; an empty or longer list is rejected, and repeated IDs are ignored). There is no path or file input.
+
+- `rows` keep the file's order. Each has `slot`, `item_id`, `quantity` and an optional `name` (untrusted display text cut to 32 characters, with `name_truncated`). **Repeated item IDs are separate rows**: the exporter lists one row per slot and they are not merged. Identify items by `item_id`.
+- `total_rows`, `offset`, `limit` and `truncated` describe the page. An offset past the end is an empty page, not a failure. `snapshot_rows` is the number of rows in the whole file.
+- **`item_ids` filter.** The whole file is searched for the requested IDs first; `offset` and `limit` then apply to the matching rows, which keep the file's order and include every matching slot (repeated IDs in different slots are all returned). `total_rows` counts the matching rows before paging. `item_filter.requested_item_ids` echoes the request without repeats and `item_filter.unmatched_item_ids` lists requested IDs with no row anywhere in the file, computed before paging, so an ID whose rows are on another page is never reported absent. Without the filter, `item_filter` is null. Names are not searched: resolve names with `item_search`. An empty bank with a filter is `ok` with every ID unmatched; a missing file is still `file_not_found`.
+- An observed empty bank is `status: ok` with `total_rows: 0`. A missing `bank.json` is `file_not_found`, never an empty bank: the exporter writes the bank only after it has been opened, files are not deleted, so a file can also be sessions old. `exported_at` is that file's own time of last change.
+- The same timing fields as `character_summary` (`exported_at`, `read_at`, `seconds_since_last_change`, `exported_at_in_future`, `plugin_version`). This file is **not** guaranteed consistent with any other export file.
+- `warnings` currently report a file whose own `item_count` differs from its rows (`item_count_mismatch`); the rows are returned as listed.
+- No prices, valuation or totals; no account name, world, session id, path or raw JSON.
+
+Failures use the same fixed statuses as `character_summary`, with messages naming `bank.json`.
+
+## The `equipment_contents` tool
+
+Read-only, no input. Reads `equipment.json` on each call and returns the same row shape, timing fields, warnings and failure statuses as `bank_contents`, without paging (a character has at most 14 equipment slots; `slot` is the exporter's index, and a row outside the documented 0 to 13 range produces an `unknown_equipment_slot` warning with the row's position).
+
+- An observed empty equipment file is `status: ok` with no rows, which is a valid state. A missing `equipment.json` is `file_not_found`, never "nothing equipped".
+- Equipment is a separate observation with its own `exported_at`; it is not guaranteed consistent with the bank or inventory files.
+- No prices, valuation or totals; no account name, world, session id, path or raw JSON.
