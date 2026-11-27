@@ -71,6 +71,8 @@ The `sleep` keeps stdin open long enough for the server to answer before it sees
 | --- | --- |
 | `server_info` | Read-only. Returns the server name, version, read-only guarantee and MCP capabilities. Uses no external data. |
 | `character_summary` | Read-only. Skill levels and experience from the local RuneLite Character Exporter file, with the exporter timestamp and import warnings. Needs `OSRS_MCP_RUNELITE_EXPORT_DIR`; see [docs/local-exports.md](docs/local-exports.md). |
+| `bank_contents` | Read-only. Bank rows (slot, item id, quantity, optional name) from the local RuneLite Character Exporter `bank.json`, paged with `offset` and `limit` or filtered with up to 50 exact `item_ids` (searched across the whole bank, with absent IDs reported), with the exporter timestamp and import warnings. No prices or totals. Needs `OSRS_MCP_RUNELITE_EXPORT_DIR`; see [docs/local-exports.md](docs/local-exports.md). |
+| `equipment_contents` | Read-only. Equipped items (slot, item id, quantity, optional name) from the local RuneLite Character Exporter `equipment.json`, with the exporter timestamp and import warnings. No prices or totals. Needs `OSRS_MCP_RUNELITE_EXPORT_DIR`; see [docs/local-exports.md](docs/local-exports.md). |
 | `item_search` | Read-only. Finds Hardcore items by id or name, with source and retrieval time. One request to the Hardcore prices API per call. See [docs/market-tools.md](docs/market-tools.md). |
 | `item_prices` | Read-only. Latest observed Hardcore instant-buy and instant-sell trades for one item id, each with price, trade time, age and per-side freshness, plus source and retrieval time. One request per call. See [docs/market-tools.md](docs/market-tools.md). |
 

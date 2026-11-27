@@ -202,23 +202,36 @@ impl Builder {
 /// Whether a line opens a caveat: a note, a "however" or a footnote.
 ///
 /// After list markers, indentation, quote marks and an opening parenthesis, the
-/// line starts (ignoring case) with `note:`, `notes:`, `note that`, the word
-/// `however` or `<ref`. The set is deliberately small: a wrong guess only
-/// keeps two lines together, but each addition has to be a construct whose
+/// line starts (ignoring case) with `note:`, `notes:`, the words `note that`
+/// or `however`, or a `<ref>` tag. The set is deliberately small: a wrong guess
+/// only keeps two lines together, but each addition has to be a construct whose
 /// meaning is understood.
 fn is_caveat(line: &str) -> bool {
     let lead = line.trim_start_matches(|character: char| {
         character.is_whitespace() || matches!(character, '*' | '#' | ':' | ';' | '\'' | '(')
     });
-    ["note:", "notes:", "note that", "<ref"]
+    ["note:", "notes:"]
         .iter()
         .any(|prefix| starts_with_ignore_case(lead, prefix))
+        || starts_with_word(lead, "note that")
         || starts_with_word(lead, "however")
+        || starts_with_ref_tag(lead)
 }
 
 fn starts_with_ignore_case(text: &str, prefix: &str) -> bool {
     text.get(..prefix.len())
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+}
+
+/// Whether the text opens a `<ref>` tag, not another tag that begins with the
+/// same letters such as `<references />`: the name must be followed by
+/// whitespace, `>` or `/`.
+fn starts_with_ref_tag(text: &str) -> bool {
+    starts_with_ignore_case(text, "<ref")
+        && text[4..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_whitespace() || matches!(next, '>' | '/'))
 }
 
 fn starts_with_word(text: &str, word: &str) -> bool {
@@ -366,6 +379,9 @@ mod tests {
             "(however it works",
             "<ref name=a>Footnote</ref>",
             "<REF>x</ref>",
+            "<ref>x</ref>",
+            "<ref/>",
+            "<ref name=a />",
         ] {
             assert!(is_caveat(caveat), "{caveat}");
         }
@@ -373,6 +389,11 @@ mod tests {
             "Noted for speed",
             "Notes on speed",
             "Howeverly",
+            "Note thatched roofs",
+            "<references />",
+            "<references/>",
+            "<refs>x</refs>",
+            "<ref",
             "A note: in the middle",
             "Whoever",
             "",
