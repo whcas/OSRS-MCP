@@ -14,7 +14,7 @@
 //!   JSON leaves this undefined and the API does not produce it.
 //! - Unknown fields are ignored.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -368,24 +368,37 @@ fn read_series_points(envelope: &Object) -> Result<Vec<SeriesPoint>, MarketDataE
 }
 
 /// Parses a `/mapping` body. Only `id` and `name` are required; the other
-/// fields were observed to be absent for some items.
+/// fields were observed to be absent for some items. IDs must be unique.
 pub(super) fn mapping(body: &[u8]) -> Result<Vec<ItemInfo>, MarketDataError> {
     const ENDPOINT: Endpoint = Endpoint::Mapping;
     let entries: Vec<Object> = from_json(ENDPOINT, body)?;
-    entries
-        .iter()
-        .map(|entry| {
-            Ok(ItemInfo {
-                id: ItemId(entry.required(ENDPOINT, "id")?),
-                name: entry.required(ENDPOINT, "name")?,
-                members: entry.optional(ENDPOINT, "members")?,
-                buy_limit: entry.optional(ENDPOINT, "limit")?,
-                value: entry.optional(ENDPOINT, "value")?,
-                low_alchemy: entry.optional(ENDPOINT, "lowalch")?,
-                high_alchemy: entry.optional(ENDPOINT, "highalch")?,
-            })
-        })
-        .collect()
+    let mut ids = BTreeSet::new();
+    let mut items = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let item = read_mapping_item(&entry)?;
+        if !ids.insert(item.id) {
+            return Err(malformed(
+                ENDPOINT,
+                Some("id"),
+                "item id appears more than once",
+            ));
+        }
+        items.push(item);
+    }
+    Ok(items)
+}
+
+fn read_mapping_item(entry: &Object) -> Result<ItemInfo, MarketDataError> {
+    const ENDPOINT: Endpoint = Endpoint::Mapping;
+    Ok(ItemInfo {
+        id: ItemId(entry.required(ENDPOINT, "id")?),
+        name: entry.required(ENDPOINT, "name")?,
+        members: entry.optional(ENDPOINT, "members")?,
+        buy_limit: entry.optional(ENDPOINT, "limit")?,
+        value: entry.optional(ENDPOINT, "value")?,
+        low_alchemy: entry.optional(ENDPOINT, "lowalch")?,
+        high_alchemy: entry.optional(ENDPOINT, "highalch")?,
+    })
 }
 
 #[cfg(test)]
@@ -639,6 +652,38 @@ mod tests {
     fn mapping_rejects_a_non_array_and_an_entry_without_a_name() {
         assert!(is_malformed(&mapping(br#"{"id":1}"#)));
         assert!(is_malformed(&mapping(br#"[{"id":1}]"#)));
+    }
+
+    #[test]
+    fn mapping_rejects_duplicate_ids_with_a_sanitized_error() {
+        let body = br#"[{"id":2,"name":"Example ammo"},{"id":2,"name":"Other ammo"}]"#;
+        let error = mapping(body).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Hardcore mapping response was malformed: item id appears more than once (field `id`)"
+        );
+    }
+
+    #[test]
+    fn mapping_keeps_distinct_ids_with_the_same_name() {
+        let body = br#"[{"id":2,"name":"Example ammo"},{"id":3,"name":"Example ammo"}]"#;
+        let items = mapping(body).unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, ItemId(2));
+        assert_eq!(items[1].id, ItemId(3));
+        assert_eq!(items[0].name, items[1].name);
+    }
+
+    #[test]
+    fn mapping_preserves_names_longer_than_the_tool_output_limit() {
+        let name = "é".repeat(129);
+        let body = format!(r#"[{{"id":2,"name":"{name}"}},{{"id":3,"name":"Other ammo"}}]"#);
+
+        let items = mapping(body.as_bytes()).unwrap();
+        assert_eq!(items[0].name, name);
+        assert_eq!(items[1].id, ItemId(3));
     }
 
     #[test]
