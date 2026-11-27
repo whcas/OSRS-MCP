@@ -35,10 +35,13 @@
 //! [`Store::page_by_title`] finds the page with an exact title and
 //! [`Store::resolve`] follows redirects from it, reporting a missing target, a
 //! loop or an ambiguous title as a [`Resolution`] rather than an empty result.
+//! [`Store::search`] runs a bounded keyword search over chunk text, section
+//! headings and titles; see [`SearchQuery`].
 
 mod error;
 mod lookup;
 mod schema;
+mod search;
 
 use std::ops::Range;
 use std::path::Path;
@@ -52,6 +55,9 @@ use super::{
 pub use error::{Operation, StoreError};
 use lookup::title_key;
 pub use lookup::{Resolution, TitleMatch};
+pub use search::{
+    InvalidSearch, MAX_QUERY_BYTES, MAX_QUERY_TERMS, MAX_RESULTS, SearchHit, SearchQuery,
+};
 
 /// Separates the entries of a list stored in one text column. None of the
 /// stored names (headings, templates, link targets) can contain a line break.
@@ -681,24 +687,30 @@ fn read_chunks(
         .map_err(StoreError::database(Operation::Read))?;
     let rows = statement
         .query_map(params![source_key, id_to_sql(id.get())?], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-                row.get(8)?,
-                row.get(9)?,
-                row.get(10)?,
-                row.get(11)?,
-            ))
+            chunk_row(row, 0)
         })
         .map_err(StoreError::database(Operation::Read))?;
     rows.map(|row| stored_chunk(row.map_err(StoreError::database(Operation::Read))?))
         .collect()
+}
+
+/// Reads the twelve chunk columns in the order of [`ChunkRow`], starting at
+/// column `first`.
+fn chunk_row(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<ChunkRow> {
+    Ok((
+        row.get(first)?,
+        row.get(first + 1)?,
+        row.get(first + 2)?,
+        row.get(first + 3)?,
+        row.get(first + 4)?,
+        row.get(first + 5)?,
+        row.get(first + 6)?,
+        row.get(first + 7)?,
+        row.get(first + 8)?,
+        row.get(first + 9)?,
+        row.get(first + 10)?,
+        row.get(first + 11)?,
+    ))
 }
 
 fn stored_chunk(row: ChunkRow) -> Result<StoredChunk, StoreError> {

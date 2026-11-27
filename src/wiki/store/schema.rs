@@ -86,13 +86,86 @@ fn v2(connection: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Version 3: a full-text index over title, section path and chunk text.
+///
+/// The index is contentless, so it stores terms only and the text lives once,
+/// in `chunk`, and its row ids are the chunk's. Version 1 keyed chunks by a
+/// composite key and so had no stable row id (`VACUUM` may renumber such
+/// rows), so the chunk table is rebuilt with an `INTEGER PRIMARY KEY` first.
+/// Triggers keep the index in step with `chunk`, so no write path can forget
+/// it, and the last statement indexes the chunks already stored. A chunk is
+/// indexed with the title its page has when the chunk is inserted: a page's
+/// chunks are always replaced together with its page row.
+const V3: &str = "
+CREATE TABLE chunk_next (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER NOT NULL,
+    page_id INTEGER NOT NULL,
+    section_index INTEGER NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    section_path TEXT NOT NULL,
+    section_occurrence INTEGER NOT NULL,
+    section_level INTEGER NOT NULL,
+    source_start INTEGER NOT NULL,
+    source_end INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    losses TEXT NOT NULL,
+    templates TEXT NOT NULL,
+    link_targets TEXT NOT NULL,
+    text TEXT NOT NULL,
+    UNIQUE (source_id, page_id, section_index, chunk_index),
+    FOREIGN KEY (source_id, page_id) REFERENCES page (source_id, page_id) ON DELETE CASCADE
+) STRICT;
+
+INSERT INTO chunk_next (source_id, page_id, section_index, chunk_index, section_path,
+                        section_occurrence, section_level, source_start, source_end,
+                        kind, losses, templates, link_targets, text)
+SELECT source_id, page_id, section_index, chunk_index, section_path,
+       section_occurrence, section_level, source_start, source_end,
+       kind, losses, templates, link_targets, text
+FROM chunk
+ORDER BY source_id, page_id, section_index, chunk_index;
+
+DROP TABLE chunk;
+ALTER TABLE chunk_next RENAME TO chunk;
+
+CREATE VIRTUAL TABLE chunk_fts USING fts5(
+    title, section, body,
+    content = '',
+    contentless_delete = 1,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER chunk_indexed AFTER INSERT ON chunk BEGIN
+    INSERT INTO chunk_fts (rowid, title, section, body)
+    VALUES (
+        new.id,
+        (SELECT title FROM page WHERE source_id = new.source_id AND page_id = new.page_id),
+        replace(new.section_path, char(10), ' '),
+        new.text
+    );
+END;
+
+CREATE TRIGGER chunk_unindexed AFTER DELETE ON chunk BEGIN
+    DELETE FROM chunk_fts WHERE rowid = old.id;
+END;
+
+INSERT INTO chunk_fts (rowid, title, section, body)
+SELECT chunk.id, page.title, replace(chunk.section_path, char(10), ' '), chunk.text
+FROM chunk JOIN page ON page.source_id = chunk.source_id AND page.page_id = chunk.page_id;
+";
+
 /// One step from schema version `n` to `n + 1`.
 type Migration = fn(&Connection) -> rusqlite::Result<()>;
 
-const MIGRATIONS: [Migration; 2] = [|connection| connection.execute_batch(V1), v2];
+const MIGRATIONS: [Migration; 3] = [
+    |connection| connection.execute_batch(V1),
+    v2,
+    |connection| connection.execute_batch(V3),
+];
 
 /// The newest schema version this build understands: the number of migrations.
-pub(super) const LATEST: i64 = 2;
+pub(super) const LATEST: i64 = 3;
 
 /// Brings the database to [`LATEST`], creating it if it is new.
 ///
@@ -157,5 +230,109 @@ mod tests {
             .unwrap();
         assert_eq!(title, "dragon__axe#x");
         assert_eq!(key, "Dragon axe");
+    }
+
+    /// The text each indexed word resolves to through the chunk table, which
+    /// is what a search hit does.
+    fn resolved(connection: &Connection, word: &str) -> Vec<String> {
+        let mut statement = connection
+            .prepare(
+                "SELECT chunk.text FROM chunk_fts JOIN chunk ON chunk.id = chunk_fts.rowid
+                 WHERE chunk_fts MATCH ?1 ORDER BY chunk.id",
+            )
+            .unwrap();
+        statement
+            .query_map([word], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn chunk_ids(connection: &Connection) -> Vec<(i64, String)> {
+        let mut statement = connection
+            .prepare("SELECT id, text FROM chunk ORDER BY id")
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn upgrading_a_populated_version_one_database_indexes_chunks_and_survives_vacuum() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(V1).unwrap();
+        connection.pragma_update(None, "user_version", 1).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO source VALUES (1, 'Wiki', '', 'https://w.example/');
+                 INSERT INTO page VALUES (1, 7, 0, 'Axe', 3, '2026-01-02T03:04:05Z', 1, NULL, NULL, 'x');
+                 INSERT INTO page VALUES (1, 8, 0, 'Pick', 4, '2026-01-02T03:04:05Z', 1, NULL, NULL, 'x');
+                 INSERT INTO chunk VALUES (1, 7, 0, 0, 'Uses' || char(10) || 'Woodcutting',
+                                           1, 2, 0, 9, 'prose', '', '', '', 'alpha chops');
+                 INSERT INTO chunk VALUES (1, 7, 1, 0, 'Trivia', 1, 2, 9, 18, 'prose', '', '', '',
+                                           'beta trees');
+                 INSERT INTO chunk VALUES (1, 8, 0, 0, '', 1, 0, 0, 9, 'prose', '', '', '',
+                                           'gamma rocks');
+                 INSERT INTO chunk VALUES (1, 8, 0, 1, '', 1, 0, 9, 18, 'prose', '', '', '',
+                                           'delta ore');",
+            )
+            .unwrap();
+
+        migrate(&mut connection).unwrap();
+
+        // Every chunk is indexed by its title, section path and text.
+        assert_eq!(resolved(&connection, "alpha"), ["alpha chops"]);
+        assert_eq!(resolved(&connection, "woodcutting"), ["alpha chops"]);
+        assert_eq!(resolved(&connection, "pick"), ["gamma rocks", "delta ore"]);
+
+        // The row ids the index relies on survive a rebuild of the file, which
+        // is what the integer primary key is for: remove a chunk so ids have a
+        // gap, then `VACUUM` and check that nothing was renumbered.
+        connection
+            .execute("DELETE FROM chunk WHERE text = 'alpha chops'", [])
+            .unwrap();
+        let before = chunk_ids(&connection);
+        connection.execute_batch("VACUUM").unwrap();
+        assert_eq!(chunk_ids(&connection), before);
+        assert_eq!(resolved(&connection, "alpha"), Vec::<String>::new());
+        for (word, text) in [
+            ("beta", "beta trees"),
+            ("gamma", "gamma rocks"),
+            ("delta", "delta ore"),
+        ] {
+            assert_eq!(resolved(&connection, word), [text], "{word}");
+        }
+    }
+
+    #[test]
+    fn the_index_follows_chunk_inserts_and_deletes() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO source VALUES (1, 'Wiki', '', 'https://w.example/');
+                 INSERT INTO page (source_id, page_id, namespace, title, revision_id, revision_time,
+                                   revision_seconds, text)
+                 VALUES (1, 7, 0, 'Axe', 3, '2026-01-02T03:04:05Z', 1, 'x');
+                 INSERT INTO chunk (source_id, page_id, section_index, chunk_index, section_path,
+                                    section_occurrence, section_level, source_start, source_end,
+                                    kind, losses, templates, link_targets, text)
+                 VALUES (1, 7, 0, 0, '', 1, 0, 0, 3, 'prose', '', '', '', 'needle');",
+            )
+            .unwrap();
+        let indexed = |connection: &Connection| -> i64 {
+            connection
+                .query_row(
+                    "SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH 'needle'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(indexed(&connection), 1);
+        connection.execute("DELETE FROM chunk", []).unwrap();
+        assert_eq!(indexed(&connection), 0);
     }
 }
