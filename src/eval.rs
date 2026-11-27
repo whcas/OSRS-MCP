@@ -1,5 +1,8 @@
 //! Dataset format for offline Wiki retrieval evaluation.
 
+/// Coverage-aware scoring of ranked Wiki retrieval results.
+pub mod scorer;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
