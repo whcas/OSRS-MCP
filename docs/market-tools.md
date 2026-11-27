@@ -60,3 +60,59 @@ choosing one. Names and matches depend on the current mapping.
 - A name over 256 UTF-8 bytes returns a tool error if its match was selected
   for the response. Other lookups can still use the same mapping. Names in
   successful results are returned in full.
+
+## `item_prices`
+
+Latest observed trades for one item from the `latest` endpoint. One request per
+valid call; invalid input makes no request. Use `item_search` first to find an
+item id.
+
+### Input
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `item_id` | integer | Required. |
+| `max_age_seconds` | integer | Optional. How old a side may be and still be `fresh`. 0 to 2,592,000 (30 days), default 3,600. Inclusive: age equal to the limit is fresh, and 0 is valid (only a trade at exactly the retrieval time is fresh). |
+
+### Output
+
+| Field | Meaning |
+| --- | --- |
+| `item_id` | The requested id. |
+| `present_in_latest` | The item appeared in the response. This does not show it is listed or tradable. |
+| `high` | Last observed instant-buy trade, or `null` if no observation was returned. |
+| `low` | Last observed instant-sell trade, or `null` if no observation was returned. |
+| `high`/`low` `.price_gp` | Whole GP. A real `0` is reported as `0`. |
+| `high`/`low` `.observed_at_unix_seconds` | When the trade was observed (seconds since the Unix epoch, UTC). |
+| `high`/`low` `.freshness` | `fresh`, `stale` or `future`, judged **per side** against `max_age_seconds`. |
+| `high`/`low` `.age_seconds` | Age in whole seconds at the retrieval time (`fresh` and `stale`). |
+| `high`/`low` `.ahead_seconds` | How far after the retrieval time the trade is dated (`future` only). |
+| `crossed` | Only when both sides are present: `low` is above `high`. Both prices are unchanged. |
+| `max_age_seconds` | The limit applied. |
+| `evaluated_at_unix_seconds` | The reference time for ages: the retrieval time. |
+| `source` | As for `item_search`, with `endpoint` `latest`. |
+| `note` | Reminder that observations are not executable offers. |
+
+Missing and stale data are results, not errors. An omitted item
+(`present_in_latest: false`), a side with no observation (`null`), a stale side and
+a future-dated side are all reported distinctly. Transport, HTTP, malformed and
+oversized responses are tool errors with fixed text. A stale observation is
+still returned with its age so the caller can decide how much to trust it.
+
+### Reading the result
+
+- `high` and `low` are the last trades observed on each side. They are not
+  guaranteed executable offers, and a trade at that price may not be available
+  again.
+- Sides can be crossed (`low` above `high`) and one side can be much older than
+  the other, so check `crossed` and each side's `freshness` before computing a
+  spread. A margin built from a stale or crossed side is not a reliable
+  estimate.
+- Ages are measured at the retrieval time, not at the moment you read the result.
+
+### Limitations
+
+- Prices only: no volume, history or averages. No caching, retry or polling; each
+  call fetches the latest observations again.
+- `null` means no observation was returned for that side, not that the item has
+  never traded.

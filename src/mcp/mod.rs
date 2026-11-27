@@ -11,6 +11,10 @@
 mod info;
 mod market;
 mod market_data;
+mod prices;
+mod provenance;
+#[cfg(test)]
+mod test_support;
 
 use std::sync::Arc;
 
@@ -59,7 +63,7 @@ impl OsrsMcpServer {
     /// injected at the service boundary.
     fn with_market(market: Arc<dyn MarketData>) -> Self {
         Self {
-            tool_router: Self::info_router() + Self::market_router(),
+            tool_router: Self::info_router() + Self::market_router() + Self::prices_router(),
             market,
         }
     }
