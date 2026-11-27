@@ -167,17 +167,36 @@ type Fields = Map<String, Value>;
 /// summary disagreement or nonempty all-not-started snapshot is reported as
 /// a warning.
 pub fn parse_quest_export(bytes: &[u8]) -> Result<QuestProgress, QuestParseError> {
+    let input = decode_json(bytes)?;
+    let fields = input.as_object().ok_or(QuestParseError::UnexpectedShape)?;
+    let (exported_at, plugin_version) = read_envelope(fields)?;
+    let quests = read_quest_list(fields)?;
+    let summary = fields.get("summary").map(read_summary).transpose()?;
+    let warnings = warnings_for(&quests, summary.as_ref());
+    Ok(QuestProgress {
+        exported_at,
+        plugin_version,
+        quests,
+        warnings,
+    })
+}
+
+/// Bounds the input and decodes it, separating a premature end from other
+/// syntax errors.
+fn decode_json(bytes: &[u8]) -> Result<Value, QuestParseError> {
     if bytes.len() > MAX_QUEST_EXPORT_BYTES {
         return Err(QuestParseError::InputTooLarge);
     }
-    let input: Value = serde_json::from_slice(bytes).map_err(|error| {
+    serde_json::from_slice(bytes).map_err(|error| {
         if error.is_eof() {
             QuestParseError::Truncated
         } else {
             QuestParseError::InvalidJson
         }
-    })?;
-    let fields = input.as_object().ok_or(QuestParseError::UnexpectedShape)?;
+    })
+}
+
+fn read_envelope(fields: &Fields) -> Result<(ExportedAt, Option<String>), QuestParseError> {
     let exported_at = required(fields, "exported_at")?
         .as_str()
         .filter(|text| text.len() <= MAX_ENVELOPE_TEXT_BYTES)
@@ -194,18 +213,14 @@ pub fn parse_quest_export(bytes: &[u8]) -> Result<QuestProgress, QuestParseError
             });
         }
     };
+    Ok((exported_at, plugin_version))
+}
+
+fn read_quest_list(fields: &Fields) -> Result<Vec<QuestRecord>, QuestParseError> {
     let rows = required(fields, "quests")?
         .as_array()
         .ok_or(QuestParseError::InvalidField { field: "quests" })?;
-    let quests = read_quests(rows)?;
-    let summary = fields.get("summary").map(read_summary).transpose()?;
-    let warnings = warnings_for(&quests, summary.as_ref());
-    Ok(QuestProgress {
-        exported_at,
-        plugin_version,
-        quests,
-        warnings,
-    })
+    read_quests(rows)
 }
 
 fn required<'a>(fields: &'a Fields, field: &'static str) -> Result<&'a Value, QuestParseError> {
