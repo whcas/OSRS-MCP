@@ -70,7 +70,7 @@ The `sleep` keeps stdin open long enough for the server to answer before it sees
 | Tool | Description |
 | --- | --- |
 | `server_info` | Read-only. Returns the server name, version, read-only guarantee and MCP capabilities. Uses no external data. |
-| `calculate_profit` | Read-only, no network. Deterministic profit, fees and ROI for a trade from explicit prices, quantity and an explicit fee policy. See [docs/calculate-profit.md](docs/calculate-profit.md). |
+| `calculate_profit` | Read-only, no network. Deterministic profit, fees and ROI for a trade or processing recipe from explicit prices, quantities and an explicit fee policy. See [docs/calculate-profit.md](docs/calculate-profit.md). |
 
 ## Development
 

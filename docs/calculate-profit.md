@@ -1,6 +1,6 @@
 # `calculate_profit`
 
-A deterministic, read-only calculator for a proposed trade. It makes no network
+A deterministic, read-only calculator for a proposed trade or processing recipe. It makes no network
 request and uses no market data: you supply the prices, the quantity and the fee
 policy, and it returns the arithmetic using the same evaluator as the rest of the
 crate (`profit::evaluate`). It is not a forecast.
@@ -12,9 +12,19 @@ crate (`profit::evaluate`). It is not a forecast.
 | `trade.buy_price_gp` | integer | Price paid per item, whole GP. `0` means a price of zero. |
 | `trade.sell_price_gp` | integer | Price received per item before fees, whole GP. |
 | `trade.quantity` | integer | Items bought and sold, at least 1. |
+| `recipe.inputs[]` | objects | Items consumed, 1 to 50 lines of `unit_price_gp` and `quantity` (at least 1). Priced as acquired. |
+| `recipe.outputs[]` | objects | Items produced and sold, 1 to 50 lines of `unit_price_gp` and `quantity`. The fee policy applies to each line. |
 | `fees` | object | **Required.** No fee rule is assumed. |
 
-Every field is required. A missing or negative price is an error, never zero.
+Give exactly one of `trade` and `recipe`. Every field of the chosen form is
+required. A missing or negative price is an error, never zero. An empty recipe side
+is an error, and a recipe with one input and one output line gives the same result
+as the equivalent trade.
+
+A recipe input you already own still has an opportunity cost (what you could sell it
+for). Price it deliberately: `0` means you value it at zero. This tool does not
+choose for you. Outputs with different fee treatment (for example exempt items)
+need separate calls.
 
 `fees.kind` is one of:
 
@@ -54,8 +64,9 @@ error. Realistic Grand Exchange values are far below these limits.
 
 ## Errors
 
-Tool errors with fixed text and no echoed values: an out-of-range input, a zero
-quantity, a fee rate above 10000 basis points, an overflow, or a result that
+Tool errors with fixed text and no echoed values: neither or both of `trade` and
+`recipe`, more than 50 lines on a recipe side, an empty recipe side, an out-of-range
+input, a zero quantity, a fee rate above 10000 basis points, an overflow, or a result that
 cannot be represented exactly.
 
 ## Using it with the market tools
@@ -73,5 +84,5 @@ only does the arithmetic on the prices you give it.
 
 ## Scope
 
-Trades only. Processing recipes (several input and output lines) are planned under
-the same issue as a separate change.
+Trades and recipes with explicit prices. This tool does not look up recipes, item
+ids, prices or Grand Exchange limits, and does not estimate fill time or GP per hour.

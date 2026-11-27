@@ -1,4 +1,5 @@
-//! The `calculate_profit` tool: deterministic profit for a proposed trade.
+//! The `calculate_profit` tool: deterministic profit for a proposed trade or
+//! processing recipe.
 //!
 //! A thin adapter over [`crate::profit`]. It validates and converts the request,
 //! calls [`evaluate`], and converts the outcome, with no arithmetic of its own.
@@ -18,7 +19,7 @@ use thiserror::Error;
 use super::OsrsMcpServer;
 use crate::domain::{DomainError, Gp, Price, Quantity};
 use crate::profit::{
-    FeePolicy, FeeRate, FeeRateError, Outcome, ProfitError, Transaction, evaluate,
+    FeePolicy, FeeRate, FeeRateError, Line, Outcome, ProfitError, Transaction, evaluate,
 };
 
 /// The largest integer a JSON number carries exactly in common clients (2^53 − 1).
@@ -30,9 +31,18 @@ const PROFIT_NOTE: &str = "Arithmetic on the prices you supplied. It does not pr
 realised profit, fill rate or GP/hour. fees_gp, net_profit_gp and roi_basis_points are null when \
 the fee policy is unknown; roi_basis_points is also null when the acquisition cost is zero.";
 
+/// Most lines accepted on each side of a recipe, which keeps requests small.
+const MAX_RECIPE_LINES: usize = 50;
+
 /// Why a request could not be turned into a result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 enum CalculationError {
+    /// Neither or both of `trade` and `recipe` were given.
+    #[error("provide exactly one of `trade` and `recipe`")]
+    TradeOrRecipe,
+    /// A recipe side has more lines than [`MAX_RECIPE_LINES`].
+    #[error("`{side}` must have at most {MAX_RECIPE_LINES} lines")]
+    TooManyLines { side: &'static str },
     /// A request integer is above the exactly representable range.
     #[error("`{field}` must be at most {MAX_EXACT_INTEGER} so it is represented exactly")]
     InputOutOfRange { field: &'static str },
@@ -95,13 +105,40 @@ struct TradeInput {
     quantity: u64,
 }
 
+/// One input or output line of a recipe.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct LineInput {
+    /// Price per item, in whole GP. Zero is allowed and means a price of zero. An
+    /// item you already own still has an opportunity cost, so price it deliberately.
+    unit_price_gp: u64,
+    /// Number of items in this line, at least 1.
+    quantity: u64,
+}
+
+/// A processing recipe: items consumed and items produced and sold.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct RecipeInput {
+    /// Items consumed, 1 to 50 lines. Priced as acquired; no fee applies.
+    inputs: Vec<LineInput>,
+    /// Items produced and sold, 1 to 50 lines. The fee policy applies to each.
+    outputs: Vec<LineInput>,
+}
+
 /// Arguments of the `calculate_profit` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct CalculateProfitInput {
-    /// The trade to evaluate, using prices you choose.
-    trade: TradeInput,
+    /// A trade to evaluate, using prices you choose. Give exactly one of `trade`
+    /// and `recipe`.
+    trade: Option<TradeInput>,
+    /// A processing recipe to evaluate, using prices you choose. Give exactly one
+    /// of `trade` and `recipe`.
+    recipe: Option<RecipeInput>,
     /// How fees on the sale are determined. Required: no fee rule is assumed.
     fees: FeesInput,
 }
@@ -156,7 +193,14 @@ fn fee_policy(fees: FeesInput) -> Result<FeePolicy, CalculationError> {
 }
 
 fn transaction(input: &CalculateProfitInput) -> Result<Transaction, CalculationError> {
-    let trade = &input.trade;
+    match (&input.trade, &input.recipe) {
+        (Some(trade), None) => trade_transaction(trade, input.fees),
+        (None, Some(recipe)) => recipe_transaction(recipe, input.fees),
+        _ => Err(CalculationError::TradeOrRecipe),
+    }
+}
+
+fn trade_transaction(trade: &TradeInput, fees: FeesInput) -> Result<Transaction, CalculationError> {
     let buy = Price(bounded(trade.buy_price_gp, "buy_price_gp")?);
     let sell = Price(bounded(trade.sell_price_gp, "sell_price_gp")?);
     let quantity =
@@ -165,8 +209,33 @@ fn transaction(input: &CalculateProfitInput) -> Result<Transaction, CalculationE
         Some(buy),
         Some(sell),
         quantity,
-        fee_policy(input.fees)?,
+        fee_policy(fees)?,
     ))
+}
+
+fn recipe_transaction(
+    recipe: &RecipeInput,
+    fees: FeesInput,
+) -> Result<Transaction, CalculationError> {
+    let inputs = lines(&recipe.inputs, "inputs")?;
+    let outputs = lines(&recipe.outputs, "outputs")?;
+    Ok(Transaction::recipe(inputs, outputs, fee_policy(fees)?))
+}
+
+/// Converts one side of a recipe. An empty side is left for the evaluator to
+/// reject, so it stays a distinct error.
+fn lines(side: &[LineInput], name: &'static str) -> Result<Vec<Line>, CalculationError> {
+    if side.len() > MAX_RECIPE_LINES {
+        return Err(CalculationError::TooManyLines { side: name });
+    }
+    side.iter()
+        .map(|line| {
+            let price = bounded(line.unit_price_gp, "unit_price_gp")?;
+            let quantity = bounded(line.quantity, "quantity")?;
+            let quantity = Quantity::new(quantity).map_err(CalculationError::Quantity)?;
+            Ok(Line::priced(Price(price), quantity))
+        })
+        .collect()
 }
 
 /// A result amount, rejected outside the exactly representable range.
@@ -213,8 +282,9 @@ impl OsrsMcpServer {
     /// Evaluates a proposed trade with explicit prices and an explicit fee policy.
     #[tool(
         name = "calculate_profit",
-        description = "Deterministic profit for a proposed trade: buy and sell a quantity at \
-                       prices you supply (whole GP) under an explicit fee policy (unknown, none, \
+        description = "Deterministic profit for a proposed trade (buy and sell a quantity) or \
+                       processing recipe (input and output lines, each with a unit price and \
+                       quantity; give exactly one of trade and recipe) at prices you supply (whole GP) under an explicit fee policy (unknown, none, \
                        or a percentage of each unit's sale price with an optional per-unit cap). \
                        Returns acquisition cost, gross revenue and profit, fees, net profit and \
                        ROI in basis points, with losses negative. No fee rule is assumed; \
@@ -252,11 +322,31 @@ mod tests {
 
     fn input(buy: u64, sell: u64, quantity: u64, fees: FeesInput) -> CalculateProfitInput {
         CalculateProfitInput {
-            trade: TradeInput {
+            trade: Some(TradeInput {
                 buy_price_gp: buy,
                 sell_price_gp: sell,
                 quantity,
-            },
+            }),
+            recipe: None,
+            fees,
+        }
+    }
+
+    fn line(unit_price_gp: u64, quantity: u64) -> LineInput {
+        LineInput {
+            unit_price_gp,
+            quantity,
+        }
+    }
+
+    fn recipe(
+        inputs: Vec<LineInput>,
+        outputs: Vec<LineInput>,
+        fees: FeesInput,
+    ) -> CalculateProfitInput {
+        CalculateProfitInput {
+            trade: None,
+            recipe: Some(RecipeInput { inputs, outputs }),
             fees,
         }
     }
@@ -435,6 +525,105 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_recipe_sums_lines_and_applies_fees_to_outputs_only() {
+        // Cost 2*100 + 50 = 250; revenue 3*200 = 600; 2% fee of 200 is 4 per unit.
+        let result = calc(&recipe(
+            vec![line(100, 2), line(50, 1)],
+            vec![line(200, 3)],
+            percent(200, None),
+        ));
+
+        assert_eq!(result.acquisition_cost_gp, 250);
+        assert_eq!(result.gross_revenue_gp, 600);
+        assert_eq!(result.gross_profit_gp, 350);
+        assert_eq!(result.fees_gp, Some(12));
+        assert_eq!(result.net_profit_gp, Some(338));
+        assert_eq!(result.roi_basis_points, Some(13_520));
+    }
+
+    #[test]
+    fn a_recipe_matches_the_equivalent_trade() {
+        let as_trade = calc(&input(100, 150, 10, percent(200, Some(2))));
+        let as_recipe = calc(&recipe(
+            vec![line(100, 10)],
+            vec![line(150, 10)],
+            percent(200, Some(2)),
+        ));
+
+        assert_eq!(as_trade, as_recipe);
+    }
+
+    #[test]
+    fn exactly_one_of_trade_and_recipe_is_required() {
+        let mut both = input(1, 2, 1, FeesInput::None);
+        both.recipe = Some(RecipeInput {
+            inputs: vec![line(1, 1)],
+            outputs: vec![line(2, 1)],
+        });
+        let mut neither = input(1, 2, 1, FeesInput::None);
+        neither.trade = None;
+
+        assert_eq!(calculate(&both), Err(CalculationError::TradeOrRecipe));
+        assert_eq!(calculate(&neither), Err(CalculationError::TradeOrRecipe));
+    }
+
+    #[test]
+    fn empty_recipe_sides_are_distinct_errors_not_zero() {
+        assert_eq!(
+            calculate(&recipe(vec![], vec![line(1, 1)], FeesInput::None)),
+            Err(CalculationError::Profit(ProfitError::NoInputs))
+        );
+        assert_eq!(
+            calculate(&recipe(vec![line(1, 1)], vec![], FeesInput::None)),
+            Err(CalculationError::Profit(ProfitError::NoOutputs))
+        );
+    }
+
+    #[test]
+    fn recipe_sides_are_limited_to_fifty_lines() {
+        let many = |count: usize| (0..count).map(|_| line(1, 1)).collect::<Vec<_>>();
+
+        assert!(calculate(&recipe(many(50), many(50), FeesInput::None)).is_ok());
+        assert_eq!(
+            calculate(&recipe(many(51), many(1), FeesInput::None)),
+            Err(CalculationError::TooManyLines { side: "inputs" })
+        );
+        assert_eq!(
+            calculate(&recipe(many(1), many(51), FeesInput::None)),
+            Err(CalculationError::TooManyLines { side: "outputs" })
+        );
+    }
+
+    #[test]
+    fn recipe_lines_use_the_same_range_and_quantity_checks() {
+        assert_eq!(
+            calculate(&recipe(vec![line(1, 0)], vec![line(1, 1)], FeesInput::None)),
+            Err(CalculationError::Quantity(DomainError::ZeroQuantity))
+        );
+        assert_eq!(
+            calculate(&recipe(
+                vec![line(1, 1)],
+                vec![line(MAX_EXACT_INTEGER + 1, 1)],
+                FeesInput::None
+            )),
+            Err(CalculationError::InputOutOfRange {
+                field: "unit_price_gp"
+            })
+        );
+        // Sum of results beyond the exact range is an error, not a rounded number.
+        assert_eq!(
+            calculate(&recipe(
+                vec![line(0, 1)],
+                vec![line(4_000_000_000_000_000, 4)],
+                FeesInput::None
+            )),
+            Err(CalculationError::ResultOutOfRange {
+                field: "gross_revenue_gp"
+            })
+        );
+    }
+
     async fn connect() -> RunningService<RoleClient, ()> {
         let (client_io, server_io) = tokio::io::duplex(16 * 1024);
         let server = OsrsMcpServer::new();
@@ -470,7 +659,7 @@ mod tests {
         assert_eq!(annotations.idempotent_hint, Some(true));
         assert_eq!(annotations.open_world_hint, Some(false));
         let schema = Value::Object((*tool.input_schema).clone());
-        assert_eq!(schema["required"], json!(["trade", "fees"]));
+        assert_eq!(schema["required"], json!(["fees"]));
         assert!(tool.output_schema.is_some(), "typed output schema");
     }
 
@@ -502,6 +691,36 @@ mod tests {
         assert_eq!(unknown["gross_profit_gp"], 100);
         assert_eq!(unknown["net_profit_gp"], Value::Null);
         assert_eq!(unknown["fees"], json!({ "kind": "unknown" }));
+    }
+
+    #[tokio::test]
+    async fn a_recipe_is_evaluated_over_the_wire_and_both_forms_together_are_an_error() {
+        let client = connect().await;
+        let recipe = json!({
+            "inputs": [{ "unit_price_gp": 100, "quantity": 2 }],
+            "outputs": [{ "unit_price_gp": 300, "quantity": 1 }]
+        });
+
+        let result = call(
+            &client,
+            json!({ "recipe": recipe, "fees": { "kind": "none" } }),
+        )
+        .await;
+        let both = call(
+            &client,
+            json!({
+                "recipe": recipe,
+                "trade": { "buy_price_gp": 1, "sell_price_gp": 2, "quantity": 1 },
+                "fees": { "kind": "none" }
+            }),
+        )
+        .await;
+
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(structured["acquisition_cost_gp"], 200);
+        assert_eq!(structured["net_profit_gp"], 100);
+        assert_eq!(structured["roi_basis_points"], 5_000);
+        assert_eq!(both.is_error, Some(true));
     }
 
     #[tokio::test]
