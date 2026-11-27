@@ -1,9 +1,11 @@
-//! Reading `character.json` from a user-configured local directory.
+//! Reading Character Exporter files from a user-configured local directory.
 //!
 //! This is the only place in the `runelite` module that touches the file
-//! system. It reads one fixed file name from one configured directory, with a
-//! byte limit, and hands the bytes to [`parse_character_export`]. Callers
+//! system. It reads fixed file names from one configured directory, each with
+//! its own byte limit, and hands the bytes to the matching parser. Callers
 //! cannot supply a path, and nothing here discovers, scans, watches or caches.
+//! Each read is independent: files are written separately, so results from
+//! different calls are separate observations, never one consistent snapshot.
 //!
 //! Errors and `Debug` output never contain the configured path or any file
 //! content: both are personal. See `docs/research/runelite-export-formats.md`
@@ -17,7 +19,10 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use super::{CharacterExport, CharacterParseError, parse_character_export};
+use super::{
+    CharacterExport, CharacterParseError, ContainerKind, ContainerParseError, ContainerSnapshot,
+    MAX_CONTAINER_EXPORT_BYTES, parse_character_export, parse_container_export,
+};
 
 /// Environment variable naming the account's Character Exporter directory,
 /// the one that contains `character.json`.
@@ -25,6 +30,25 @@ pub const EXPORT_DIR_VAR: &str = "OSRS_MCP_RUNELITE_EXPORT_DIR";
 
 /// The only file this module reads.
 pub const CHARACTER_FILE_NAME: &str = "character.json";
+
+/// Bank holdings file.
+pub const BANK_FILE_NAME: &str = "bank.json";
+
+/// Inventory file.
+pub const INVENTORY_FILE_NAME: &str = "inventory.json";
+
+/// Equipment file.
+pub const EQUIPMENT_FILE_NAME: &str = "equipment.json";
+
+/// The only file this module reads for `kind`.
+#[must_use]
+pub const fn container_file_name(kind: ContainerKind) -> &'static str {
+    match kind {
+        ContainerKind::Bank => BANK_FILE_NAME,
+        ContainerKind::Inventory => INVENTORY_FILE_NAME,
+        ContainerKind::Equipment => EQUIPMENT_FILE_NAME,
+    }
+}
 
 /// Largest `character.json` that is read, in bytes.
 ///
@@ -94,16 +118,53 @@ impl LocalExportSource {
     /// be read within [`MAX_CHARACTER_EXPORT_BYTES`], or its content is not a
     /// valid export.
     pub fn read_character(&self) -> Result<CharacterExport, ExportReadError> {
+        let bytes = self.read_file(CHARACTER_FILE_NAME, MAX_CHARACTER_EXPORT_BYTES)?;
+        parse_character_export(&bytes)
+            .map_err(ParseFailure::from)
+            .map_err(ExportReadError::Parse)
+    }
+
+    /// Reads and parses the bank, inventory or equipment file.
+    ///
+    /// Reads and failures behave as for [`read_character`](Self::read_character),
+    /// with the limit [`MAX_CONTAINER_EXPORT_BYTES`]. A missing file is
+    /// [`ExportReadError::FileNotFound`], never an empty container: the
+    /// exporter writes a container only after it has been observed, and an
+    /// old file may remain from an earlier session. An observed empty
+    /// container is a valid snapshot with no rows. Each container file has
+    /// its own timestamp, so results for different kinds are separate
+    /// observations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExportReadError`] if nothing is configured, the file cannot
+    /// be read within the limit, or its content is not a valid export of the
+    /// requested kind.
+    pub fn read_container(
+        &self,
+        kind: ContainerKind,
+    ) -> Result<ContainerSnapshot, ExportReadError> {
+        let bytes = self.read_file(container_file_name(kind), container_limit())?;
+        parse_container_export(kind, &bytes)
+            .map_err(ParseFailure::from)
+            .map_err(ExportReadError::Parse)
+    }
+
+    fn read_file(&self, file_name: &str, limit: u64) -> Result<Vec<u8>, ExportReadError> {
         let directory = self
             .directory
             .as_deref()
             .ok_or(ExportReadError::NotConfigured)?;
-        let bytes = read_bounded(&directory.join(CHARACTER_FILE_NAME), directory)?;
-        Ok(parse_character_export(&bytes)?)
+        read_bounded(&directory.join(file_name), directory, limit)
     }
 }
 
-/// Why `character.json` could not be read and imported.
+/// The container parser's byte limit as the reader's unit.
+fn container_limit() -> u64 {
+    u64::try_from(MAX_CONTAINER_EXPORT_BYTES).unwrap_or(u64::MAX)
+}
+
+/// Why an export file could not be read and imported.
 ///
 /// No variant carries a path, file content or operating-system message.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -114,30 +175,30 @@ pub enum ExportReadError {
     /// The configured directory does not exist or is not a directory.
     #[error("the configured export directory does not exist or is not a directory")]
     DirectoryUnavailable,
-    /// The directory exists but has no `character.json`.
-    #[error("the export directory contains no character.json")]
+    /// The directory exists but has no file for the requested dataset.
+    #[error("the export directory contains no file for this dataset")]
     FileNotFound,
-    /// `character.json` exists but is not a regular file.
-    #[error("character.json is not a regular file")]
+    /// The dataset's file exists but is not a regular file.
+    #[error("the export file is not a regular file")]
     NotARegularFile,
     /// The operating system refused access.
-    #[error("permission denied reading character.json")]
+    #[error("permission denied reading the export file")]
     PermissionDenied,
     /// The file is larger than the read limit.
-    #[error("character.json is larger than the {limit} byte limit")]
+    #[error("the export file is larger than the {limit} byte limit")]
     TooLarge {
         /// The limit, in bytes.
         limit: u64,
     },
     /// Any other read failure, identified by its kind only.
-    #[error("character.json could not be read ({kind})")]
+    #[error("the export file could not be read ({kind})")]
     Io {
         /// The error kind reported by the operating system.
         kind: io::ErrorKind,
     },
     /// The file was read but is not an acceptable export.
-    #[error("character.json could not be imported")]
-    Parse(#[from] CharacterParseError),
+    #[error("the export file could not be imported")]
+    Parse(#[source] ParseFailure),
 }
 
 impl ExportReadError {
@@ -145,13 +206,35 @@ impl ExportReadError {
     /// probably caught mid-write.
     #[must_use]
     pub const fn is_transient(&self) -> bool {
-        matches!(self, Self::Parse(error) if error.is_transient())
+        matches!(self, Self::Parse(failure) if failure.is_transient())
     }
 }
 
-/// Reads `path` if it is a regular file of at most
-/// [`MAX_CHARACTER_EXPORT_BYTES`] bytes.
-fn read_bounded(path: &Path, directory: &Path) -> Result<Vec<u8>, ExportReadError> {
+/// The parser error behind [`ExportReadError::Parse`], by dataset. The text
+/// is the parser's own sanitised description.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ParseFailure {
+    /// `character.json` was rejected.
+    #[error(transparent)]
+    Character(#[from] CharacterParseError),
+    /// A bank, inventory or equipment file was rejected.
+    #[error(transparent)]
+    Container(#[from] ContainerParseError),
+}
+
+impl ParseFailure {
+    /// Whether the input ended unexpectedly, as it can during a write.
+    #[must_use]
+    pub const fn is_transient(&self) -> bool {
+        match self {
+            Self::Character(error) => error.is_transient(),
+            Self::Container(error) => error.is_transient(),
+        }
+    }
+}
+
+/// Reads `path` if it is a regular file of at most `limit` bytes.
+fn read_bounded(path: &Path, directory: &Path, limit: u64) -> Result<Vec<u8>, ExportReadError> {
     // Checked before opening: opening a named pipe would block until a writer
     // appears. `metadata` follows symlinks. This is a guard against a
     // mistaken file, not a defence against someone replacing the file between
@@ -166,13 +249,11 @@ fn read_bounded(path: &Path, directory: &Path) -> Result<Vec<u8>, ExportReadErro
     let mut bytes = Vec::new();
     // One byte past the limit tells "exactly at the limit" from "larger",
     // even if the file grows after the check above.
-    file.take(MAX_CHARACTER_EXPORT_BYTES + 1)
+    file.take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|error| classify_io(&error))?;
-    if u64::try_from(bytes.len()).map_or(true, |read| read > MAX_CHARACTER_EXPORT_BYTES) {
-        return Err(ExportReadError::TooLarge {
-            limit: MAX_CHARACTER_EXPORT_BYTES,
-        });
+    if u64::try_from(bytes.len()).map_or(true, |read| read > limit) {
+        return Err(ExportReadError::TooLarge { limit });
     }
     Ok(bytes)
 }
@@ -208,6 +289,12 @@ mod tests {
 
     const SYNTHETIC_EXPORT: &[u8] =
         include_bytes!("../../tests/fixtures/runelite_export/character.synthetic.json");
+    const SYNTHETIC_BANK: &[u8] =
+        include_bytes!("../../tests/fixtures/runelite_export/bank.synthetic.json");
+    const SYNTHETIC_INVENTORY: &[u8] =
+        include_bytes!("../../tests/fixtures/runelite_export/inventory.synthetic.json");
+    const SYNTHETIC_EQUIPMENT: &[u8] =
+        include_bytes!("../../tests/fixtures/runelite_export/equipment.synthetic.json");
 
     fn new_dir() -> TempDir {
         TempDir::with_prefix("osrs-mcp-source-").unwrap()
@@ -360,7 +447,7 @@ mod tests {
 
         assert_eq!(
             error,
-            ExportReadError::Parse(CharacterParseError::Truncated)
+            ExportReadError::Parse(CharacterParseError::Truncated.into())
         );
         assert!(error.is_transient());
     }
@@ -384,7 +471,7 @@ mod tests {
 
         assert_eq!(
             error,
-            ExportReadError::Parse(CharacterParseError::InvalidJson)
+            ExportReadError::Parse(CharacterParseError::InvalidJson.into())
         );
         assert!(!error.is_transient());
     }
@@ -431,6 +518,196 @@ mod tests {
         let message = source.read_character().unwrap_err().to_string();
 
         assert!(!message.contains("missing-private-name"), "{message}");
+        assert!(!message.contains(&directory_name), "{message}");
+    }
+
+    fn write_container(dir: &TempDir, kind: ContainerKind, content: &[u8]) {
+        fs::write(dir.path().join(container_file_name(kind)), content).unwrap();
+    }
+
+    fn synthetic_container(kind: ContainerKind) -> &'static [u8] {
+        match kind {
+            ContainerKind::Bank => SYNTHETIC_BANK,
+            ContainerKind::Inventory => SYNTHETIC_INVENTORY,
+            ContainerKind::Equipment => SYNTHETIC_EQUIPMENT,
+        }
+    }
+
+    const ALL_KINDS: [ContainerKind; 3] = [
+        ContainerKind::Bank,
+        ContainerKind::Inventory,
+        ContainerKind::Equipment,
+    ];
+
+    #[test]
+    fn each_container_kind_reads_only_its_own_fixed_file() {
+        for kind in ALL_KINDS {
+            let dir = new_dir();
+            write_container(&dir, kind, synthetic_container(kind));
+
+            let snapshot = source_for(&dir).read_container(kind).unwrap();
+
+            assert_eq!(
+                snapshot,
+                parse_container_export(kind, synthetic_container(kind)).unwrap()
+            );
+            for other in ALL_KINDS.into_iter().filter(|other| *other != kind) {
+                assert_eq!(
+                    source_for(&dir).read_container(other),
+                    Err(ExportReadError::FileNotFound),
+                    "{other:?} must not read the {kind:?} file"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_container_file_is_not_an_empty_container() {
+        let dir = new_dir();
+
+        for kind in ALL_KINDS {
+            assert_eq!(
+                source_for(&dir).read_container(kind),
+                Err(ExportReadError::FileNotFound)
+            );
+        }
+    }
+
+    #[test]
+    fn an_observed_empty_container_is_a_valid_snapshot() {
+        let dir = new_dir();
+        write_container(&dir, ContainerKind::Equipment, SYNTHETIC_EQUIPMENT);
+
+        let snapshot = source_for(&dir)
+            .read_container(ContainerKind::Equipment)
+            .unwrap();
+
+        assert_eq!(snapshot.rows(), []);
+        assert_eq!(snapshot.warnings(), []);
+    }
+
+    #[test]
+    fn a_file_holding_another_container_kind_is_rejected() {
+        let dir = new_dir();
+        write_container(&dir, ContainerKind::Bank, SYNTHETIC_EQUIPMENT);
+
+        assert_eq!(
+            source_for(&dir).read_container(ContainerKind::Bank),
+            Err(ExportReadError::Parse(
+                ContainerParseError::WrongKind.into()
+            ))
+        );
+    }
+
+    #[test]
+    fn container_files_keep_independent_timestamps() {
+        let dir = new_dir();
+        write_container(&dir, ContainerKind::Bank, SYNTHETIC_BANK);
+        let newer = String::from_utf8(SYNTHETIC_INVENTORY.to_vec())
+            .unwrap()
+            .replace("2026-01-01T12:00Z", "2026-02-02T09:30Z");
+        write_container(&dir, ContainerKind::Inventory, newer.as_bytes());
+
+        let bank = source_for(&dir)
+            .read_container(ContainerKind::Bank)
+            .unwrap();
+        let inventory = source_for(&dir)
+            .read_container(ContainerKind::Inventory)
+            .unwrap();
+
+        assert_ne!(bank.exported_at(), inventory.exported_at());
+    }
+
+    #[test]
+    fn container_reads_are_fresh_each_call() {
+        let dir = new_dir();
+        write_container(&dir, ContainerKind::Equipment, SYNTHETIC_EQUIPMENT);
+        let source = source_for(&dir);
+        let first = source.read_container(ContainerKind::Equipment).unwrap();
+
+        let populated = String::from_utf8(SYNTHETIC_INVENTORY.to_vec())
+            .unwrap()
+            .replace("\"inventory\"", "\"equipment\"");
+        write_container(&dir, ContainerKind::Equipment, populated.as_bytes());
+        let second = source.read_container(ContainerKind::Equipment).unwrap();
+
+        assert_ne!(first.rows(), second.rows());
+    }
+
+    #[test]
+    fn a_container_file_over_the_parser_limit_is_rejected_without_being_parsed() {
+        let dir = new_dir();
+        let oversized = vec![b' '; MAX_CONTAINER_EXPORT_BYTES + 1];
+        write_container(&dir, ContainerKind::Bank, &oversized);
+
+        assert_eq!(
+            source_for(&dir).read_container(ContainerKind::Bank),
+            Err(ExportReadError::TooLarge {
+                limit: container_limit()
+            })
+        );
+    }
+
+    #[test]
+    fn a_container_file_exactly_at_the_limit_is_read() {
+        let dir = new_dir();
+        let mut content = SYNTHETIC_BANK.to_vec();
+        content.resize(MAX_CONTAINER_EXPORT_BYTES, b' ');
+        write_container(&dir, ContainerKind::Bank, &content);
+
+        assert!(source_for(&dir).read_container(ContainerKind::Bank).is_ok());
+    }
+
+    #[test]
+    fn the_character_limit_is_unchanged_by_the_container_limit() {
+        let dir = new_dir();
+        let oversized = vec![b' '; usize::try_from(MAX_CHARACTER_EXPORT_BYTES).unwrap() + 1];
+        write_character(&dir, &oversized);
+
+        assert_eq!(
+            source_for(&dir).read_character(),
+            Err(ExportReadError::TooLarge {
+                limit: MAX_CHARACTER_EXPORT_BYTES
+            })
+        );
+    }
+
+    #[test]
+    fn a_truncated_container_file_is_transient() {
+        let dir = new_dir();
+        write_container(
+            &dir,
+            ContainerKind::Bank,
+            &SYNTHETIC_BANK[..SYNTHETIC_BANK.len() / 2],
+        );
+
+        let error = source_for(&dir)
+            .read_container(ContainerKind::Bank)
+            .unwrap_err();
+
+        assert!(error.is_transient());
+    }
+
+    #[test]
+    fn container_errors_do_not_contain_the_path_or_file_content() {
+        let dir = new_dir();
+        write_container(&dir, ContainerKind::Bank, b"{\"private-marker\": 1");
+        let directory_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let message = format!(
+            "{:?} {}",
+            source_for(&dir).read_container(ContainerKind::Bank),
+            source_for(&dir)
+                .read_container(ContainerKind::Bank)
+                .unwrap_err()
+        );
+
+        assert!(!message.contains("private-marker"), "{message}");
         assert!(!message.contains(&directory_name), "{message}");
     }
 }
