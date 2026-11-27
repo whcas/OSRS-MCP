@@ -16,6 +16,7 @@ mod market;
 mod market_data;
 mod prices;
 mod provenance;
+mod quests;
 #[cfg(test)]
 mod test_support;
 
@@ -43,6 +44,7 @@ pub use containers::{
 pub use export_output::{
     ExportFailure, ExportedAtOutput, FailureStatus, ObservationTime, UnreadableReason,
 };
+pub use quests::{QuestCounts, QuestOutput, QuestStateOutput, QuestStatus, QuestWarningOutput};
 
 /// A failed `character_summary` call; the failure shape is shared by all
 /// account tools.
@@ -85,6 +87,7 @@ impl OsrsMcpServer {
             tool_router: Self::info_router()
                 + Self::character_router()
                 + Self::containers_router()
+                + Self::quests_router()
                 + Self::market_router()
                 + Self::prices_router(),
             market,
