@@ -28,7 +28,7 @@ tokio = { version = "1", features = ["rt"] }
 [dev-dependencies]
 # Client side of the SDK, used only to drive the server from tests.
 rmcp = { version = "3.11", default-features = false, features = ["client", "server", "macros"] }
-# `net` is for the loopback HTTP server in tests/market_client.rs.
+# `net` is for the loopback HTTP server in the market client's unit tests.
 tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }
 
 # Lint baseline: see "Lints" in README.md. CI runs Clippy with `-D warnings`,

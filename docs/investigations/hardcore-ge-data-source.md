@@ -151,7 +151,7 @@ The client in `src/market/` follows the sketch above with these differences:
 - `reqwest` 0.13 puts query-string support behind a feature, so query parameters are built with `Url::query_pairs_mut`.
 - The mapping response is parsed with only `id` and `name` required; the live check showed `limit`, `value`, `highalch` and `lowalch` can be absent, so the parser's choice is confirmed.
 - Fixtures in `tests/fixtures/hardcore_ge/` are partly synthetic; see the README there.
-- The client rejects any base URL other than the real `osrs-hc` endpoint or a loopback test server, records the exact source URL in provenance, validates scoped responses against the request, and reports observations dated in the future as such. These follow review feedback and are covered by regression tests.
+- The client's endpoint is fixed to the real `osrs-hc` base URL, with no public way to change it, and it records the exact source URL in provenance, validates scoped responses against the request, and reports observations dated in the future as such. These follow review feedback and are covered by regression tests.
 - The client was checked against the live API on 2026-11-26 with the opt-in test in "Local verification procedure". Only HTTP 400 for bad window timestamps has been observed among error responses; 403, 429 and 5xx remain unobserved.
 
 ## Trade-offs and recommendation

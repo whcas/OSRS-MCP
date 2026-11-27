@@ -31,22 +31,12 @@ const DEFAULT_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Settings for [`HardcoreClient`].
 ///
-/// The defaults target the real Hardcore endpoint with an identifying
-/// `User-Agent`. `base_url` is checked at construction: it must be
-/// [`HARDCORE_BASE_URL`]. The one exception is a local test server: with
-/// `allow_loopback_test_server` set (off by default), an `http` loopback URL
-/// whose path ends in `osrs-hc` is also accepted. Any other origin, and the
-/// standard-world path, is rejected. Results from a loopback server are still
-/// labelled Hardcore, because the label cannot know what a local process
-/// serves; [`Provenance::source_url`] shows where each result came from, and
-/// production code should never set the flag.
+/// The defaults identify this project in the `User-Agent` and use conservative
+/// timeouts. The endpoint is not configurable: a client always queries
+/// [`HARDCORE_BASE_URL`], so a result labelled Hardcore cannot have come from
+/// anywhere else, and [`Provenance::source_url`] records the exact URL anyway.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    /// Base URL; see the type documentation for what is accepted.
-    pub base_url: String,
-    /// Also accept an `http` loopback base URL for a local test server. Off by
-    /// default; intended for tests only.
-    pub allow_loopback_test_server: bool,
     /// Value of the `User-Agent` header. Must not be blank. The API operator
     /// asks for a descriptive value and blocks generic client names.
     pub user_agent: String,
@@ -63,8 +53,6 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            base_url: HARDCORE_BASE_URL.to_owned(),
-            allow_loopback_test_server: false,
             user_agent: format!(
                 "{}/{} (+https://github.com/whcas/OSRS-MCP)",
                 env!("CARGO_PKG_NAME"),
@@ -81,13 +69,10 @@ impl Default for ClientConfig {
 /// Why a client could not be constructed.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ConfigError {
-    /// The base URL did not parse.
-    #[error("base URL is not a valid URL")]
+    /// The endpoint URLs could not be derived from the base URL. This is not
+    /// expected for the built-in Hardcore endpoint.
+    #[error("endpoint URLs could not be derived from the base URL")]
     InvalidBaseUrl,
-    /// The base URL is not the Hardcore endpoint (or, when allowed, a loopback
-    /// test server whose path ends in `osrs-hc`).
-    #[error("base URL is not the Hardcore endpoint or a loopback osrs-hc test server")]
-    NotHardcoreEndpoint,
     /// The `User-Agent` was blank.
     #[error("user agent must not be blank")]
     BlankUserAgent,
@@ -130,14 +115,22 @@ impl HardcoreClient {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] for an invalid base URL, a blank `User-Agent`,
-    /// or if the HTTP client cannot be built.
+    /// Returns [`ConfigError`] for a blank `User-Agent`, or if the HTTP client
+    /// cannot be built.
     pub fn new(config: ClientConfig) -> Result<Self, ConfigError> {
+        let base_url = Url::parse(HARDCORE_BASE_URL).map_err(|_| ConfigError::InvalidBaseUrl)?;
+        Self::with_base_url(config, &base_url)
+    }
+
+    /// The construction path behind [`new`](Self::new), taking the base URL
+    /// explicitly. It is private so that no caller outside this module can point
+    /// a client at another origin; the unit tests use it to reach a loopback
+    /// server. `base` must end with `/` so that endpoint paths append to it.
+    fn with_base_url(config: ClientConfig, base: &Url) -> Result<Self, ConfigError> {
         if config.user_agent.trim().is_empty() {
             return Err(ConfigError::BlankUserAgent);
         }
-        let base_url = parse_base_url(&config.base_url, config.allow_loopback_test_server)?;
-        let endpoints = EndpointUrls::new(&base_url)?;
+        let endpoints = EndpointUrls::new(base)?;
         let http = Client::builder()
             .user_agent(config.user_agent)
             .connect_timeout(config.connect_timeout)
@@ -357,40 +350,6 @@ impl EndpointUrls {
     }
 }
 
-/// Parses the base URL, guarantees a trailing slash on its path, and accepts
-/// only Hardcore origins (see [`ClientConfig`]).
-fn parse_base_url(text: &str, allow_loopback: bool) -> Result<Url, ConfigError> {
-    let mut url = Url::parse(text).map_err(|_| ConfigError::InvalidBaseUrl)?;
-    if url.cannot_be_a_base() {
-        return Err(ConfigError::InvalidBaseUrl);
-    }
-    if !url.path().ends_with('/') {
-        let path = format!("{}/", url.path());
-        url.set_path(&path);
-    }
-    if is_hardcore_origin(&url, allow_loopback) {
-        Ok(url)
-    } else {
-        Err(ConfigError::NotHardcoreEndpoint)
-    }
-}
-
-fn is_hardcore_origin(url: &Url, allow_loopback: bool) -> bool {
-    let plain = url.username().is_empty()
-        && url.password().is_none()
-        && url.query().is_none()
-        && url.fragment().is_none();
-    let real = url.scheme() == "https"
-        && url.host_str() == Some("prices.runescape.wiki")
-        && url.port().is_none()
-        && url.path() == "/api/v2/osrs-hc/";
-    let loopback = allow_loopback
-        && url.scheme() == "http"
-        && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
-        && url.path().ends_with("/osrs-hc/");
-    plain && (real || loopback)
-}
-
 fn transport_kind(error: &reqwest::Error) -> TransportKind {
     if error.is_timeout() {
         TransportKind::Timeout
@@ -403,12 +362,28 @@ fn transport_kind(error: &reqwest::Error) -> TransportKind {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
     use super::*;
 
     #[test]
-    fn default_base_url_is_the_hardcore_endpoint_never_standard() {
-        let url = parse_base_url(&ClientConfig::default().base_url, false).unwrap();
-        assert_eq!(url.path(), "/api/v2/osrs-hc/");
+    fn a_public_client_always_targets_the_real_hardcore_endpoint() {
+        let client = HardcoreClient::new(ClientConfig::default()).unwrap();
+        for (endpoint, expected) in [
+            (Endpoint::Mapping, "mapping"),
+            (Endpoint::Latest, "latest"),
+            (Endpoint::FiveMinute, "5m"),
+            (Endpoint::OneHour, "1h"),
+            (Endpoint::Timeseries, "timeseries"),
+        ] {
+            assert_eq!(
+                client.endpoint_url(endpoint, &[]).as_str(),
+                format!("https://prices.runescape.wiki/api/v2/osrs-hc/{expected}"),
+            );
+        }
     }
 
     #[test]
@@ -419,136 +394,462 @@ mod tests {
     }
 
     #[test]
-    fn base_url_gets_a_trailing_slash_and_endpoint_urls_append_to_it() {
-        let config = ClientConfig {
-            base_url: "http://127.0.0.1:9/api/osrs-hc".to_owned(),
-            allow_loopback_test_server: true,
-            ..ClientConfig::default()
+    fn a_blank_user_agent_is_rejected() {
+        let with = |user_agent: &str| {
+            HardcoreClient::new(ClientConfig {
+                user_agent: user_agent.to_owned(),
+                ..ClientConfig::default()
+            })
+            .map(|_| ())
         };
-        let client = HardcoreClient::new(config).unwrap();
+        assert_eq!(with("  "), Err(ConfigError::BlankUserAgent));
+        assert_eq!(with(""), Err(ConfigError::BlankUserAgent));
+        assert_eq!(with("ua"), Ok(()));
+    }
+
+    #[test]
+    fn endpoint_urls_append_to_the_base_and_carry_the_query() {
+        let base = Url::parse("http://127.0.0.1:9/api/osrs-hc/").unwrap();
+        let client = HardcoreClient::with_base_url(ClientConfig::default(), &base).unwrap();
         assert_eq!(
             client
                 .endpoint_url(Endpoint::FiveMinute, &[("timestamp", "60".to_owned())])
                 .as_str(),
             "http://127.0.0.1:9/api/osrs-hc/5m?timestamp=60"
         );
-        for (endpoint, expected) in [
-            (Endpoint::Mapping, "mapping"),
-            (Endpoint::Latest, "latest"),
-            (Endpoint::OneHour, "1h"),
-            (Endpoint::Timeseries, "timeseries"),
-        ] {
-            assert_eq!(
-                client.endpoint_url(endpoint, &[]).as_str(),
-                format!("http://127.0.0.1:9/api/osrs-hc/{expected}")
-            );
-        }
     }
 
     #[test]
-    fn invalid_configuration_is_rejected() {
-        let with = |base_url: &str, user_agent: &str| {
-            HardcoreClient::new(ClientConfig {
-                base_url: base_url.to_owned(),
-                user_agent: user_agent.to_owned(),
-                ..ClientConfig::default()
+    fn a_base_that_cannot_take_endpoint_paths_is_rejected() {
+        let base = Url::parse("mailto:a@b.c").unwrap();
+        assert_eq!(
+            HardcoreClient::with_base_url(ClientConfig::default(), &base).map(|_| ()),
+            Err(ConfigError::InvalidBaseUrl)
+        );
+    }
+
+    // The tests below drive the client over HTTP against an in-process server
+    // bound to loopback. They are unit tests of this module because they reach
+    // the private `with_base_url` constructor; no test touches the network
+    // beyond loopback.
+
+    const LATEST: &str = include_str!("../../tests/fixtures/hardcore_ge/latest.json");
+    const FIVE_MINUTE: &str = include_str!("../../tests/fixtures/hardcore_ge/five_minute.json");
+    const TIMESERIES: &str = include_str!("../../tests/fixtures/hardcore_ge/timeseries_24h.json");
+    const MAPPING: &str = include_str!("../../tests/fixtures/hardcore_ge/mapping.json");
+
+    /// A frozen clock so `retrieved_at` is deterministic.
+    fn fixed_now() -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(1_795_700_000)
+    }
+
+    /// What the mock server does with one connection.
+    #[derive(Clone)]
+    enum Reply {
+        /// A complete response with the given status line and body.
+        Respond { status: &'static str, body: String },
+        /// Redirect to another location.
+        Redirect,
+        /// Wait this long before answering, to provoke a client timeout.
+        Stall(Duration),
+        /// Send a body with no `Content-Length`, closing the connection to end it.
+        Unframed(Vec<u8>),
+    }
+
+    /// Request heads seen by the mock server, in arrival order.
+    type Seen = Arc<Mutex<Vec<String>>>;
+
+    struct Mock {
+        base_url: String,
+        seen: Seen,
+    }
+
+    impl Mock {
+        fn requests(&self) -> Vec<String> {
+            self.seen.lock().unwrap().clone()
+        }
+
+        fn request_line(&self, index: usize) -> String {
+            self.requests()[index].lines().next().unwrap().to_owned()
+        }
+
+        fn header(&self, index: usize, name: &str) -> Option<String> {
+            self.requests()[index].lines().skip(1).find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                key.eq_ignore_ascii_case(name)
+                    .then(|| value.trim().to_owned())
             })
-            .map(|_| ())
+        }
+    }
+
+    /// Starts a server that answers each successive connection with the next reply
+    /// (the last reply repeats).
+    async fn serve(replies: Vec<Reply>) -> Mock {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}/api/v2/osrs-hc/", listener.local_addr().unwrap());
+        let seen: Seen = Arc::default();
+        let log = Arc::clone(&seen);
+        tokio::spawn(async move {
+            for index in 0.. {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let reply = replies[index.min(replies.len() - 1)].clone();
+                tokio::spawn(handle_connection(stream, reply, Arc::clone(&log)));
+            }
+        });
+        Mock { base_url, seen }
+    }
+
+    /// Serves one connection: records the request head, then sends `reply`. A
+    /// connection that closes before sending a full head is dropped unanswered.
+    async fn handle_connection(mut stream: TcpStream, reply: Reply, log: Seen) {
+        let Some(head) = read_request_head(&mut stream).await else {
+            return;
         };
-        assert_eq!(with("not a url", "ua"), Err(ConfigError::InvalidBaseUrl));
-        assert_eq!(
-            with("file:///tmp/x/", "ua"),
-            Err(ConfigError::NotHardcoreEndpoint)
-        );
-        assert_eq!(with("mailto:a@b.c", "ua"), Err(ConfigError::InvalidBaseUrl));
-        assert_eq!(
-            with(HARDCORE_BASE_URL, "  "),
-            Err(ConfigError::BlankUserAgent)
-        );
-        assert_eq!(with(HARDCORE_BASE_URL, "ua"), Ok(()));
+        log.lock().unwrap().push(head);
+        let _ = write_reply(&mut stream, reply).await;
     }
 
-    #[test]
-    fn loopback_is_refused_unless_explicitly_allowed() {
-        let url = "http://127.0.0.1:8080/api/v2/osrs-hc/";
-        assert_eq!(
-            parse_base_url(url, false).map(|_| ()),
-            Err(ConfigError::NotHardcoreEndpoint)
-        );
-        assert!(parse_base_url(url, true).is_ok());
-        // The flag never widens the real endpoint's checks.
-        assert_eq!(
-            parse_base_url("https://prices.runescape.wiki/api/v2/osrs/", true).map(|_| ()),
-            Err(ConfigError::NotHardcoreEndpoint)
-        );
-    }
-
-    #[test]
-    fn only_hardcore_origins_can_be_labelled_hardcore() {
-        let rejected = [
-            // Standard-world path on the real host.
-            "https://prices.runescape.wiki/api/v2/osrs/",
-            "https://prices.runescape.wiki/api/v1/osrs/",
-            "https://prices.runescape.wiki/api/v2/osrs-hc/extra/",
-            // Right path, wrong host.
-            "https://example.com/api/v2/osrs-hc/",
-            "https://prices.runescape.wiki.example.com/api/v2/osrs-hc/",
-            // Plain http to the real host, credentials, port, query.
-            "http://prices.runescape.wiki/api/v2/osrs-hc/",
-            "https://user@prices.runescape.wiki/api/v2/osrs-hc/",
-            "https://prices.runescape.wiki:8443/api/v2/osrs-hc/",
-            "https://prices.runescape.wiki/api/v2/osrs-hc/?x=1",
-            // Loopback with a standard-world path, or https loopback.
-            "http://127.0.0.1:8080/api/v2/osrs/",
-            "http://127.0.0.1:8080/",
-            "file:///tmp/osrs-hc/",
-        ];
-        for base_url in rejected {
-            assert_eq!(
-                parse_base_url(base_url, true).map(|_| ()),
-                Err(ConfigError::NotHardcoreEndpoint),
-                "{base_url}"
-            );
+    /// Reads up to the blank line that ends an HTTP request head, or `None` if the
+    /// connection closes or fails first.
+    async fn read_request_head(stream: &mut TcpStream) -> Option<String> {
+        let mut head = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+            match stream.read(&mut buffer).await {
+                Ok(0) | Err(_) => return None,
+                Ok(read) => head.extend_from_slice(&buffer[..read]),
+            }
         }
-        for base_url in [
-            "https://prices.runescape.wiki/api/v2/osrs-hc",
-            "https://prices.runescape.wiki/api/v2/osrs-hc/",
-            "http://127.0.0.1:8080/anything/osrs-hc/",
-            "http://localhost:3000/osrs-hc",
-            "http://[::1]:3000/osrs-hc/",
-        ] {
-            assert!(parse_base_url(base_url, true).is_ok(), "{base_url}");
+        Some(String::from_utf8_lossy(&head).into_owned())
+    }
+
+    async fn write_reply(stream: &mut TcpStream, reply: Reply) -> std::io::Result<()> {
+        match reply {
+            Reply::Respond { status, body } => {
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(head.as_bytes()).await?;
+                stream.write_all(body.as_bytes()).await?;
+            }
+            Reply::Redirect => {
+                let head = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/api/v2/osrs/latest\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                stream.write_all(head.as_bytes()).await?;
+            }
+            Reply::Stall(delay) => {
+                tokio::time::sleep(delay).await;
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await?;
+            }
+            Reply::Unframed(body) => {
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                    .await?;
+                stream.write_all(&body).await?;
+            }
+        }
+        stream.shutdown().await
+    }
+
+    fn ok(body: &str) -> Reply {
+        Reply::Respond {
+            status: "200 OK",
+            body: body.to_owned(),
         }
     }
 
-    #[test]
-    fn the_standard_world_endpoint_cannot_be_used_to_build_a_hardcore_client() {
-        for base_url in [
-            "https://prices.runescape.wiki/api/v2/osrs/",
-            "http://127.0.0.1:8080/api/v2/osrs/",
-        ] {
-            let config = ClientConfig {
-                base_url: base_url.to_owned(),
-                allow_loopback_test_server: true,
-                ..ClientConfig::default()
-            };
-            assert_eq!(
-                HardcoreClient::new(config).map(|_| ()),
-                Err(ConfigError::NotHardcoreEndpoint),
-                "{base_url}"
-            );
+    fn status(status: &'static str) -> Reply {
+        Reply::Respond {
+            status,
+            body: "{}".to_owned(),
         }
     }
 
-    #[test]
-    fn a_loopback_server_is_refused_by_default() {
-        let config = ClientConfig {
-            base_url: "http://127.0.0.1:8080/api/v2/osrs-hc/".to_owned(),
+    fn client_for(mock: &Mock, adjust: impl FnOnce(&mut ClientConfig)) -> HardcoreClient {
+        client_at(&mock.base_url, adjust)
+    }
+
+    fn client_at(base_url: &str, adjust: impl FnOnce(&mut ClientConfig)) -> HardcoreClient {
+        let mut config = ClientConfig {
+            clock: fixed_now,
+            request_timeout: Duration::from_secs(5),
             ..ClientConfig::default()
         };
+        adjust(&mut config);
+        let base = Url::parse(base_url).unwrap();
+        HardcoreClient::with_base_url(config, &base).unwrap()
+    }
+
+    #[tokio::test]
+    async fn latest_for_one_item_requests_the_hardcore_path_and_labels_provenance() {
+        let scoped =
+            r#"{"data":{"4151":{"high":8000000,"highTime":1794623592,"low":null,"lowTime":null}}}"#;
+        let mock = serve(vec![ok(scoped)]).await;
+        let client = client_for(&mock, |_| {});
+
+        let result = client.latest(Some(ItemId(4151))).await.unwrap();
+
         assert_eq!(
-            HardcoreClient::new(config).map(|_| ()),
-            Err(ConfigError::NotHardcoreEndpoint)
+            mock.request_line(0),
+            "GET /api/v2/osrs-hc/latest?id=4151 HTTP/1.1"
+        );
+        assert_eq!(result.provenance.world_type, WorldType::Hardcore);
+        assert_eq!(result.provenance.endpoint, Endpoint::Latest);
+        assert_eq!(
+            result.provenance.source_url,
+            format!("{}latest?id=4151", mock.base_url)
+        );
+        assert_eq!(result.provenance.retrieved_at, UnixSeconds(1_795_700_000));
+        let prices = result.value[&ItemId(4151)];
+        assert_eq!(prices.high.map(|t| t.price.0), Some(8_000_000));
+        assert_eq!(prices.low, None, "a never-seen side stays missing");
+    }
+
+    #[tokio::test]
+    async fn every_request_carries_the_configured_user_agent() {
+        let mock = serve(vec![ok(LATEST)]).await;
+        let client = client_for(&mock, |config| {
+            config.user_agent = "osrs-mcp-test/9.9 (+https://example.invalid)".to_owned();
+        });
+
+        client.latest(None).await.unwrap();
+
+        assert_eq!(mock.request_line(0), "GET /api/v2/osrs-hc/latest HTTP/1.1");
+        assert_eq!(
+            mock.header(0, "user-agent").as_deref(),
+            Some("osrs-mcp-test/9.9 (+https://example.invalid)")
+        );
+    }
+
+    #[tokio::test]
+    async fn window_and_timeseries_and_mapping_use_their_documented_queries() {
+        let mock = serve(vec![
+            ok(FIVE_MINUTE),
+            ok(FIVE_MINUTE),
+            ok(TIMESERIES),
+            ok(MAPPING),
+        ])
+        .await;
+        let client = client_for(&mock, |_| {});
+
+        let latest_window = client
+            .window(WindowLength::FiveMinutes, None)
+            .await
+            .unwrap();
+        assert_eq!(latest_window.value.items.len(), 4);
+        assert_eq!(latest_window.provenance.endpoint, Endpoint::FiveMinute);
+
+        client
+            .window(WindowLength::FiveMinutes, Some(UnixSeconds(1_795_504_200)))
+            .await
+            .unwrap();
+        let series = client
+            .timeseries(ItemId(4151), Lookback::TwentyFourHours)
+            .await
+            .unwrap();
+        assert_eq!(series.value.points.len(), 4);
+        let mapping = client.mapping().await.unwrap();
+        assert_eq!(mapping.value.len(), 2);
+
+        let lines: Vec<String> = (0..4).map(|index| mock.request_line(index)).collect();
+        assert_eq!(
+            lines,
+            [
+                "GET /api/v2/osrs-hc/5m HTTP/1.1",
+                "GET /api/v2/osrs-hc/5m?timestamp=1795504200 HTTP/1.1",
+                "GET /api/v2/osrs-hc/timeseries?id=4151&lookback=24h HTTP/1.1",
+                "GET /api/v2/osrs-hc/mapping HTTP/1.1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn http_errors_carry_the_status_and_are_not_parsed() {
+        for (line, code) in [
+            ("429 Too Many Requests", 429),
+            ("403 Forbidden", 403),
+            ("500 Internal Server Error", 500),
+            ("404 Not Found", 404),
+        ] {
+            let mock = serve(vec![status(line)]).await;
+            let error = client_for(&mock, |_| {}).latest(None).await.unwrap_err();
+            assert_eq!(
+                error,
+                MarketDataError::Http {
+                    endpoint: Endpoint::Latest,
+                    status: code
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn redirects_are_surfaced_not_followed() {
+        let mock = serve(vec![Reply::Redirect]).await;
+        let error = client_for(&mock, |_| {}).latest(None).await.unwrap_err();
+        assert_eq!(
+            error,
+            MarketDataError::Http {
+                endpoint: Endpoint::Latest,
+                status: 302
+            }
+        );
+        assert_eq!(mock.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_bodies_are_malformed_errors() {
+        for body in [
+            "",
+            "<html>Access denied</html>",
+            r#"{"data":[1,2]}"#,
+            "null",
+        ] {
+            let mock = serve(vec![ok(body)]).await;
+            let error = client_for(&mock, |_| {}).latest(None).await.unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    MarketDataError::Malformed {
+                        endpoint: Endpoint::Latest,
+                        ..
+                    }
+                ),
+                "body {body:?} gave {error:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_data_is_returned_with_missing_sides_intact() {
+        let body = r#"{"data":{"1":{"high":10,"highTime":5,"low":null,"lowTime":null},"2":{"high":null,"highTime":null,"low":null,"lowTime":null}}}"#;
+        let mock = serve(vec![ok(body)]).await;
+        let result = client_for(&mock, |_| {}).latest(None).await.unwrap();
+        assert_eq!(result.value.len(), 2);
+        assert_eq!(result.value[&ItemId(2)].high, None);
+        assert_eq!(result.value[&ItemId(2)].low, None);
+    }
+
+    #[tokio::test]
+    async fn slow_servers_time_out() {
+        let mock = serve(vec![Reply::Stall(Duration::from_secs(5))]).await;
+        let client = client_for(&mock, |config| {
+            config.request_timeout = Duration::from_millis(100);
+        });
+        let error = client.latest(None).await.unwrap_err();
+        assert_eq!(
+            error,
+            MarketDataError::Transport {
+                endpoint: Endpoint::Latest,
+                kind: TransportKind::Timeout
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn connection_failures_are_transport_errors() {
+        // Port 1 on loopback is closed.
+        let client = client_at("http://127.0.0.1:1/api/v2/osrs-hc/", |_| {});
+        let error = client.latest(None).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                MarketDataError::Transport {
+                    endpoint: Endpoint::Latest,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bodies_over_the_limit_are_rejected_with_and_without_content_length() {
+        let big = format!(r#"{{"data":{{}},"pad":"{}"}}"#, "x".repeat(2_000));
+        for reply in [ok(&big), Reply::Unframed(big.clone().into_bytes())] {
+            let mock = serve(vec![reply]).await;
+            let client = client_for(&mock, |config| config.max_response_bytes = 1_000);
+            let error = client.latest(None).await.unwrap_err();
+            assert_eq!(
+                error,
+                MarketDataError::ResponseTooLarge {
+                    endpoint: Endpoint::Latest,
+                    limit_bytes: 1_000
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_body_exactly_at_the_limit_is_accepted() {
+        let body = r#"{"data":{}}"#;
+        let mock = serve(vec![ok(body)]).await;
+        let client = client_for(&mock, |config| config.max_response_bytes = body.len());
+        assert!(client.latest(None).await.unwrap().value.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_response_for_a_different_item_than_requested_is_malformed() {
+        // The unscoped fixture holds items 2, 99 and 4151, so it is not a valid
+        // answer to a request for item 4151 alone.
+        let mock = serve(vec![ok(LATEST)]).await;
+        let error = client_for(&mock, |_| {})
+            .latest(Some(ItemId(4151)))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                MarketDataError::Malformed {
+                    endpoint: Endpoint::Latest,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+
+        let mock = serve(vec![ok(TIMESERIES)]).await;
+        let error = client_for(&mock, |_| {})
+            .timeseries(ItemId(2), Lookback::TwentyFourHours)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                MarketDataError::Malformed {
+                    endpoint: Endpoint::Timeseries,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_requested_item_missing_from_the_response_is_valid_and_absent() {
+        let mock = serve(vec![ok(r#"{"data":{}}"#)]).await;
+        let result = client_for(&mock, |_| {})
+            .latest(Some(ItemId(4151)))
+            .await
+            .unwrap();
+        assert!(result.value.is_empty());
+    }
+
+    fn before_epoch() -> SystemTime {
+        UNIX_EPOCH - Duration::from_secs(1)
+    }
+
+    #[tokio::test]
+    async fn a_clock_before_the_epoch_is_an_error_not_a_zero_retrieval_time() {
+        let mock = serve(vec![ok(r#"{"data":{}}"#)]).await;
+        let client = client_for(&mock, |config| config.clock = before_epoch);
+        assert_eq!(
+            client.latest(None).await.unwrap_err(),
+            MarketDataError::ClockBeforeEpoch
         );
     }
 }

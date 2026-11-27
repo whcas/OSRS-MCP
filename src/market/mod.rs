@@ -14,10 +14,9 @@
 //!
 //! - Results are always labelled [`WorldType::Hardcore`]. The client targets
 //!   the `osrs-hc` endpoint set and never falls back to standard-world data.
-//!   The configured base URL must be that endpoint. A loopback test server is
-//!   accepted only when `allow_loopback_test_server` is set (off by default,
-//!   for tests); its results still carry the Hardcore label, so
-//!   [`Provenance::source_url`] records the exact URL each result came from.
+//!   The endpoint is not configurable, so no public caller can point a client
+//!   elsewhere; [`Provenance::source_url`] still records the exact URL each
+//!   result came from.
 //! - Scoped responses are checked against the request: a `latest` or
 //!   `timeseries` answer for a different item, a zero timestep or a reversed
 //!   range is malformed. Averages are parsed from their exact text and
@@ -40,8 +39,8 @@
 //!   from their exact text without a global change to JSON number handling):
 //!   response parsing. Bodies are
 //!   parsed by this crate from already-bounded bytes rather than by `reqwest`.
-//! - `tokio` is a dev-dependency only, for the loopback server used in
-//!   `tests/market_client.rs`.
+//! - `tokio` is a dev-dependency only, for the loopback server used by the
+//!   unit tests in `client.rs`.
 
 mod client;
 mod error;
