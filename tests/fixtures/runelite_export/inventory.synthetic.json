@@ -1,0 +1,8 @@
+{
+  "exported_at": "2026-01-01T12:00:00.123456Z",
+  "kind": "inventory",
+  "item_count": 1,
+  "items": [
+    { "slot": 8, "id": 5023, "quantity": 318 }
+  ]
+}
