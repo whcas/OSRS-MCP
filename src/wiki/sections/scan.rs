@@ -38,10 +38,27 @@ enum Region {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ScanState {
+pub(super) struct ScanState {
     region: Region,
     /// How many `{{` are open. Template arguments may span lines.
     template_depth: usize,
+}
+
+impl ScanState {
+    /// The state at the start of a text: no comment, literal tag or template
+    /// is open.
+    pub(super) const fn new() -> Self {
+        Self {
+            region: Region::Plain,
+            template_depth: 0,
+        }
+    }
+
+    /// Whether the next byte is outside every comment, literal tag and
+    /// template call.
+    pub(super) fn is_top_level(&self) -> bool {
+        self.region == Region::Plain && self.template_depth == 0
+    }
 }
 
 /// Longest heading title kept, in bytes. Real headings are a few dozen bytes;
@@ -66,16 +83,12 @@ pub(super) enum ScanError {
 /// without scanning further.
 pub(super) fn find_headings(text: &str, max_headings: usize) -> Result<Vec<Heading>, ScanError> {
     let mut headings = Vec::new();
-    let mut state = ScanState {
-        region: Region::Plain,
-        template_depth: 0,
-    };
+    let mut state = ScanState::new();
     let mut offset = 0;
     for raw_line in text.split_inclusive('\n') {
         let line_end = offset + raw_line.len();
         let line = raw_line.trim_end_matches('\n').trim_end_matches('\r');
-        let at_top_level = state.region == Region::Plain && state.template_depth == 0;
-        if let Some((level, title)) = parse_heading(line).filter(|_| at_top_level) {
+        if let Some((level, title)) = parse_heading(line).filter(|_| state.is_top_level()) {
             if headings.len() >= max_headings {
                 return Err(ScanError::TooManyHeadings);
             }
@@ -125,7 +138,7 @@ fn strip_trailing_comments(mut line: &str) -> &str {
 }
 
 /// Updates the state for the text of one line.
-fn advance(state: &mut ScanState, line: &str) {
+pub(super) fn advance(state: &mut ScanState, line: &str) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
@@ -166,6 +179,45 @@ fn advance_plain(state: &mut ScanState, rest: &[u8]) -> usize {
     } else {
         1
     }
+}
+
+/// A comment or literal-tag element, which is not wikitext markup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Literal {
+    /// `<!-- ... -->`, which renders as nothing.
+    Comment(usize),
+    /// A literal-tag element such as `<nowiki>...</nowiki>`, whose content
+    /// renders as plain text.
+    Raw(usize),
+}
+
+impl Literal {
+    /// The element's length in bytes.
+    pub(super) const fn len(self) -> usize {
+        match self {
+            Self::Comment(len) | Self::Raw(len) => len,
+        }
+    }
+}
+
+/// The comment or literal-tag element at the start of `rest`, which may span
+/// lines. An element that is never closed runs to the end of `rest`.
+pub(super) fn literal_at(rest: &[u8]) -> Option<Literal> {
+    if let Some(after_opening) = rest.strip_prefix(b"<!--") {
+        let end = find(after_opening, b"-->").map_or(after_opening.len(), |at| at + 3);
+        return Some(Literal::Comment(4 + end));
+    }
+    let (tag, _) = raw_tag_at(rest)?;
+    let Some(close) = rest.iter().position(|&byte| byte == b'>') else {
+        return Some(Literal::Raw(rest.len()));
+    };
+    let opening_end = close + 1;
+    if rest[..close].ends_with(b"/") {
+        return Some(Literal::Raw(opening_end));
+    }
+    let end = find_closing_tag(&rest[opening_end..], RAW_TAGS[tag])
+        .map_or(rest.len(), |at| opening_end + at);
+    Some(Literal::Raw(end))
 }
 
 /// Handles `<` in plain text: an opening raw-text tag starts a raw region.
