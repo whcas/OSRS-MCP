@@ -11,6 +11,9 @@ publish = false
 # Date and time. Only `Timestamp` parsing and formatting are used, so default
 # features (time zone database, system zone lookup, logging) are off.
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+# HTTP client for the Hardcore prices API. Default features are disabled: only
+# the rustls TLS backend is needed, and bodies are parsed by this crate.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # Official Rust MCP SDK. Default features are disabled so that only the server
 # side, the tool macros and the stdio transport are compiled; see ADR-0001.
 rmcp = { version = "3.11", default-features = false, features = ["server", "macros", "transport-io"] }
@@ -28,7 +31,8 @@ tokio = { version = "1", features = ["rt"] }
 [dev-dependencies]
 # Client side of the SDK, used only to drive the server from tests.
 rmcp = { version = "3.11", default-features = false, features = ["client", "server", "macros"] }
-tokio = { version = "1", features = ["rt", "macros", "io-util", "time"] }
+# `net` is for the loopback HTTP server in the market client's unit tests.
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }
 
 # Lint baseline: see "Lints" in README.md. CI runs Clippy with `-D warnings`,
 # so every `warn` below fails the build. Group levels use priority -1 so the
