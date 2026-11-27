@@ -24,8 +24,21 @@
 //!   page is bounded by the text plus at most 2000 sections of at most six
 //!   short titles each, not by chunks times path length.
 //! - A section is never mixed with its neighbours: a chunk belongs to exactly
-//!   one section. Chunks prefer paragraph, then line boundaries, and cut inside
-//!   a line only when one line exceeds the bound ([`Chunk::cuts_line`]).
+//!   one section. Chunks prefer paragraph boundaries, then boundaries between
+//!   blocks: lines, list items, table rows and multi-line template calls are
+//!   kept whole when they fit, and a table that fits is kept whole too. They cut
+//!   between the lines of one block only when it exceeds the bound, and inside
+//!   a line only when one line does.
+//! - A caveat (a line opening with `Note:`, `Notes:`, `Note that`, `However`
+//!   or a `<ref` footnote) is kept in the chunk of the claim before it when the
+//!   two fit together. Where a boundary still falls inside a table, markup,
+//!   line or between a claim and its caveat, both neighbouring chunks list the
+//!   matching [`Loss`].
+//! - Templates are never expanded. Each chunk lists the templates it calls and
+//!   the pages it links to ([`Chunk::templates`], [`Chunk::link_targets`]), and
+//!   is [`ChunkKind::TemplateOnly`] when template calls are all it holds, so a
+//!   reader can tell prose from an unexpanded infobox. Parser functions are
+//!   listed by name, `{{{parameters}}}` are not calls, and nothing is looked up.
 //! - A redirect page has no sections or chunks; its target is carried on the
 //!   [`PreparedPage`].
 //!
@@ -33,7 +46,9 @@
 //! and errors carry counts and limits only.
 
 mod chunk;
+mod references;
 mod scan;
+mod structure;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -202,6 +217,38 @@ pub struct Section {
     pub body: Range<usize>,
 }
 
+/// What a chunk boundary or the chunk's content leaves out, so that a reader
+/// knows the text may mislead on its own. Only the boundaries are listed:
+/// chunks are verbatim, so nothing inside them is altered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Loss {
+    /// An edge of the chunk falls inside a line, because that line was longer
+    /// than the chunk bound. Markup on that line may be cut in two.
+    CutLine,
+    /// An edge falls between the lines of one multi-line template call,
+    /// comment or literal tag, which was too long to keep whole.
+    SplitMarkup,
+    /// An edge falls between two parts of one table, so rows may lack the
+    /// table's header or the rest of the table.
+    SplitTable,
+    /// An edge separates a caveat (see the module documentation) from the
+    /// claim before it, because the two did not fit in one chunk.
+    SplitCaveat,
+}
+
+/// Whether a chunk says anything beyond calling templates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkKind {
+    /// The chunk has text, links or literal markup outside template calls.
+    /// It may still call templates, which [`Chunk::templates`] lists.
+    Prose,
+    /// Everything but whitespace and comments is a template call, so the
+    /// chunk's substance is whatever those calls expand to, which this crate
+    /// never produces. Search results from such a chunk are matches on
+    /// template names and arguments only.
+    TemplateOnly,
+}
+
 /// A bounded retrieval unit: verbatim wikitext from one section.
 ///
 /// A chunk refers to its section by position instead of owning a copy of its
@@ -218,9 +265,24 @@ pub struct Chunk {
     pub source: Range<usize>,
     /// The wikitext at `source`, trimmed of surrounding whitespace.
     pub text: String,
-    /// Whether an edge of the chunk falls inside a line, because that line was
-    /// longer than the chunk bound.
-    pub cuts_line: bool,
+    /// What the chunk's edges damage, without repeats, in [`Loss`] order.
+    pub losses: Vec<Loss>,
+    /// Whether the chunk is more than template calls.
+    pub kind: ChunkKind,
+    /// The unexpanded templates and parser functions the text calls, each once
+    /// in order of appearance, as written. See [`ChunkKind::TemplateOnly`].
+    pub templates: Vec<String>,
+    /// The pages the text links to, each once in order of appearance, without
+    /// label or section. Unresolved: the pages may be absent from the corpus.
+    pub link_targets: Vec<String>,
+}
+
+impl Chunk {
+    /// Whether the chunk's edges cause `loss`.
+    #[must_use]
+    pub fn has_loss(&self, loss: Loss) -> bool {
+        self.losses.contains(&loss)
+    }
 }
 
 impl fmt::Debug for Chunk {
@@ -232,7 +294,10 @@ impl fmt::Debug for Chunk {
             .field("index", &self.index)
             .field("source", &self.source)
             .field("text_bytes", &self.text.len())
-            .field("cuts_line", &self.cuts_line)
+            .field("losses", &self.losses)
+            .field("kind", &self.kind)
+            .field("template_count", &self.templates.len())
+            .field("link_target_count", &self.link_targets.len())
             .finish()
     }
 }
@@ -371,16 +436,36 @@ fn chunk_sections(text: &str, sections: &[Section], limits: &PrepareLimits) -> V
                 .map(move |(index, piece)| {
                     let source = section.body.start + piece.range.start
                         ..section.body.start + piece.range.end;
-                    Chunk {
-                        section: section_index,
-                        index,
-                        text: text[source.clone()].to_owned(),
-                        source,
-                        cuts_line: piece.cuts_line,
-                    }
+                    chunk_from(section_index, index, source, piece.losses, text)
                 })
         })
         .collect()
+}
+
+fn chunk_from(
+    section: usize,
+    index: usize,
+    source: Range<usize>,
+    losses: Vec<Loss>,
+    page_text: &str,
+) -> Chunk {
+    let text = page_text[source.clone()].to_owned();
+    let references = references::scan(&text);
+    let kind = if references.has_prose || references.templates.is_empty() {
+        ChunkKind::Prose
+    } else {
+        ChunkKind::TemplateOnly
+    };
+    Chunk {
+        section,
+        index,
+        source,
+        text,
+        losses,
+        kind,
+        templates: references.templates,
+        link_targets: references.link_targets,
+    }
 }
 
 #[cfg(test)]
@@ -549,7 +634,7 @@ mod tests {
         let indexes: Vec<usize> = result.chunks.iter().map(|chunk| chunk.index).collect();
         assert_eq!(indexes, [0, 1, 2]);
         assert!(result.chunks.iter().all(|chunk| chunk.text.len() <= 30));
-        assert!(result.chunks.iter().all(|chunk| !chunk.cuts_line));
+        assert!(result.chunks.iter().all(|chunk| chunk.losses.is_empty()));
     }
 
     #[test]
@@ -686,5 +771,86 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_chunk_of_template_calls_is_template_only_and_lists_the_calls() {
+        let result = prepared("{{Infobox Item|name=Axe|image=[[File:Axe.png]]}}\n{{Drops|x}}");
+        let chunk = &result.chunks[0];
+        assert_eq!(chunk.kind, ChunkKind::TemplateOnly);
+        assert_eq!(chunk.templates, ["Infobox Item", "Drops"]);
+        assert_eq!(chunk.link_targets, ["File:Axe.png"]);
+    }
+
+    #[test]
+    fn prose_with_a_template_is_prose_and_keeps_the_call_visible() {
+        let result = prepared("Sold for {{Coins|100}} at [[Bob's Axes|the shop]].");
+        let chunk = &result.chunks[0];
+        assert_eq!(chunk.kind, ChunkKind::Prose);
+        assert_eq!(chunk.templates, ["Coins"]);
+        assert_eq!(chunk.link_targets, ["Bob's Axes"]);
+        assert!(chunk.text.contains("{{Coins|100}}"));
+    }
+
+    #[test]
+    fn a_chunk_without_templates_or_links_lists_nothing() {
+        let result = prepared("Plain words only.");
+        let chunk = &result.chunks[0];
+        assert_eq!(chunk.kind, ChunkKind::Prose);
+        assert!(chunk.templates.is_empty() && chunk.link_targets.is_empty());
+        assert_eq!(chunk.losses, []);
+    }
+
+    #[test]
+    fn kind_and_references_are_reported_for_each_chunk_separately() {
+        let result = prepare(&page("{{A}}\n\nWords [[B]]"), &limits(12, 10)).unwrap();
+        let summary: Vec<(ChunkKind, Vec<&str>, Vec<&str>)> = result
+            .chunks
+            .iter()
+            .map(|chunk| {
+                (
+                    chunk.kind,
+                    chunk.templates.iter().map(String::as_str).collect(),
+                    chunk.link_targets.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (ChunkKind::TemplateOnly, vec!["A"], vec![]),
+                (ChunkKind::Prose, vec![], vec!["B"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_table_split_across_chunks_is_reported_on_each_of_them() {
+        let text = "== Stats ==\n{|\n! Item\n|-\n| Axe\n|-\n| Pick\n|}";
+        let result = prepare(&page(text), &limits(14, 10)).unwrap();
+        assert!(result.chunks.len() > 1);
+        for chunk in &result.chunks {
+            assert_eq!(chunk.losses, [Loss::SplitTable]);
+            assert!(chunk.has_loss(Loss::SplitTable));
+            assert!(!chunk.has_loss(Loss::CutLine));
+        }
+    }
+
+    #[test]
+    fn a_whole_page_prepares_identically_every_time_with_every_new_construct() {
+        let text = "lead {{T|x}}\n== A ==\n* one\n* two\nNote: aside\n{|\n|-\n| [[B]]\n|}\n{{Box\n|k=v\n}}";
+        for chunk in [8, 16, 40, 2000] {
+            let first = prepare(&page(text), &limits(chunk, 50)).unwrap();
+            assert_eq!(first, prepare(&page(text), &limits(chunk, 50)).unwrap());
+            assert!(first.chunks.iter().all(|c| c.text.len() <= chunk));
+        }
+    }
+
+    #[test]
+    fn debug_output_omits_template_and_link_names() {
+        let result = prepared("{{SECRETMARKER|x}} [[SECRETMARKER2]]");
+        let debug = format!("{:?}", result.chunks[0]);
+        assert!(!debug.contains("SECRETMARKER"), "{debug}");
+        assert!(debug.contains("template_count"));
     }
 }
