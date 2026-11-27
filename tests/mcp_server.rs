@@ -58,7 +58,12 @@ async fn tool_discovery_lists_only_described_read_only_tools_including_server_in
     names.sort_unstable();
     assert_eq!(
         names,
-        ["item_prices", "item_search", "server_info"],
+        [
+            "character_summary",
+            "item_prices",
+            "item_search",
+            "server_info"
+        ],
         "tools: {tools:?}"
     );
     for tool in &tools {
