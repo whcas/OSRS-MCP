@@ -72,7 +72,7 @@ Built by `exportCharacterSnapshot` from `basePayload`, account fields and `build
 
 ## Timestamps and freshness
 
-- `exported_at` is `OffsetDateTime.now().toString()` in the **system default zone**. Java's `toString` omits zero seconds and zero fractions and prints the fraction in groups of three digits, so valid values include `2026-01-01T12:00Z`, `2026-01-01T12:00:00.123Z`, `2026-01-01T12:00:00.123456Z` and `2026-01-01T12:00:00+01:00`. The authentic export used `YYYY-MM-DDTHH:MM:SS.ffffffZ` (UTC, microseconds). The parser must accept all ISO-8601 offset forms, not just that one.
+- `exported_at` is `OffsetDateTime.now().toString()` in the **system default zone**. Java's `toString` omits zero seconds and zero fractions and prints the fraction in groups of three digits, so valid values include `2026-01-01T12:00Z`, `2026-01-01T12:00:00.123Z`, `2026-01-01T12:00:00.123456Z` and `2026-01-01T12:00:00+01:00`. The authentic export used `YYYY-MM-DDTHH:MM:SS.ffffffZ` (UTC, microseconds). The parser must accept all ISO-8601 offset forms, not just that one. The implementation parses with `jiff`, which accepts all of those forms and is somewhat more lenient than the plugin's output (for example a space separator or a lowercase `z`). A leap second (`:60`) is normalised to `:59`; Java cannot produce one. The original text and nanosecond precision are kept.
 - **`exported_at` is the time of the last change, not the last observation.** `writeJson` compares a `stableJson` that **excludes `exported_at` and `reason`**, and does not rewrite the file if nothing else changed. A file with an old `exported_at` can still describe the current state. Report `exported_at` verbatim, treat age as "no change since", and let the caller decide what is stale. The file modification time has the same limitation.
 
 ## Write semantics and consumption
@@ -115,7 +115,7 @@ Aligned with the maintainer's clarifications on #15 and #19.
 
 **Optional or ignored**
 - `boosted_level` is part of the upstream schema and is documented above, but the minimal importer **intentionally ignores it**: it is not parsed, validated or retained, so advice cannot depend on it.
-- `plugin_version` is recorded as text; any value is accepted.
+- `plugin_version` is recorded as text. Any JSON *string* is accepted, whatever its content; a missing field or an explicit `null` is `None`; any other JSON type (number, boolean, array, object) is an error.
 - `account_name`, `world`, `game_state`, `world_types` and `reason` are not required. `account_name` is a personal identifier and is **not retained**.
 - `session_id` is **not retained**.
 
@@ -123,6 +123,7 @@ Aligned with the maintainer's clarifications on #15 and #19.
 - `real_level` is an integer in `1..=99` for **every** skill, including skill names the importer does not recognise; the maintainer has accepted 99 as the hard cap for real levels. `experience` is an integer in `0..=200_000_000`. Anything else is a typed error.
 - A level inconsistent with the standard experience table is a **warning, not an error**, applied only to recognised skills, where the experience table is known to apply. Unknown skills are kept and reported with a warning, and are not checked against the table.
 - Missing or non-object `stats`, wrong types and duplicate skills are typed errors. Truncated input is reported separately (retryable, see "Write semantics"), as is other invalid JSON (not automatically retryable).
+- Errors never carry text from the file: a skill is named in an error only if the importer recognises it, otherwise it is identified by its 1-based position in `stats`. A skill whose value is not an object is its own error.
 - Skill names are parsed into a known set with an explicit unknown variant, so new skills do not fail the import. Whether unknown skills are kept or only reported is for #19 to decide and document.
 
 **Unknown fields.** Ignored at every level. There is no declared format version to reject.
