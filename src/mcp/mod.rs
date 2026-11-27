@@ -9,6 +9,7 @@
 //! `+` in `new`, which keeps unrelated tool changes from conflicting.
 
 mod info;
+mod profit;
 
 use rmcp::{
     ServerHandler, ServiceExt,
@@ -45,7 +46,7 @@ impl OsrsMcpServer {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            tool_router: Self::info_router(),
+            tool_router: Self::info_router() + Self::profit_router(),
         }
     }
 }
