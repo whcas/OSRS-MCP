@@ -119,11 +119,20 @@ async fn unknown_tool_is_a_protocol_error() {
 #[tokio::test]
 async fn server_info_capabilities_match_the_initialize_response() {
     let (client, _server) = connect().await;
-    let declared = client
-        .peer_info()
-        .expect("server info after handshake")
-        .capabilities
-        .clone();
+    let declared = serde_json::to_value(
+        client
+            .peer_info()
+            .expect("server info after handshake")
+            .capabilities
+            .clone(),
+    )
+    .expect("capabilities serialise");
+    let declared: Vec<&str> = declared
+        .as_object()
+        .expect("capabilities object")
+        .keys()
+        .map(String::as_str)
+        .collect();
 
     let result = call_server_info(&client).await;
     let structured = result.structured_content.expect("structured content");
@@ -134,17 +143,5 @@ async fn server_info_capabilities_match_the_initialize_response() {
         .map(|name| name.as_str().expect("capability name"))
         .collect();
 
-    for (name, is_declared) in [
-        ("tools", declared.tools.is_some()),
-        ("resources", declared.resources.is_some()),
-        ("prompts", declared.prompts.is_some()),
-        ("completions", declared.completions.is_some()),
-        ("logging", declared.logging.is_some()),
-    ] {
-        assert_eq!(
-            reported.contains(&name),
-            is_declared,
-            "capability {name}: tool reported {reported:?}"
-        );
-    }
+    assert_eq!(reported, declared);
 }
