@@ -1,6 +1,6 @@
 //! Behavioural tests for the opt-in Git hooks and their installer.
 //!
-//! Every test builds a throwaway repository in a unique temporary directory,
+//! Every test builds a throwaway repository in a private temporary directory,
 //! copies in the real hooks and installer, and replaces `scripts/check.sh` with
 //! a stub that records its arguments. The tests therefore never touch the
 //! developer's own repository or Git configuration, and never recurse into the
@@ -10,46 +10,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU32, Ordering};
 
-static NEXT_ID: AtomicU32 = AtomicU32::new(0);
+use tempfile::TempDir;
 
-/// Atomically creates the first directory in `parent` named by `names` that
-/// does not already exist. Existing paths are never touched or deleted, so a
-/// directory this code did not create is never removed later.
-fn claim_dir(parent: &Path, names: impl IntoIterator<Item = String>) -> PathBuf {
-    use std::io::ErrorKind;
-    use std::os::unix::fs::DirBuilderExt;
-
-    for name in names {
-        let candidate = parent.join(name);
-        match fs::DirBuilder::new().mode(0o700).create(&candidate) {
-            Ok(()) => return candidate,
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
-            Err(error) => panic!("cannot create {}: {error}", candidate.display()),
-        }
-    }
-    panic!("no free directory name under {}", parent.display());
-}
-
-/// Candidate directory names that differ by process, a counter and the clock.
-fn unique_names() -> impl Iterator<Item = String> {
-    (0..100).map(|attempt| {
-        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.subsec_nanos());
-        format!(
-            "osrs-mcp-hooks-{}-{id}-{nanos}-{attempt}",
-            std::process::id()
-        )
-    })
-}
-
-/// A temporary repository (plus bare remote) that is deleted on drop.
-/// It only ever deletes the directory it created itself.
+/// A temporary repository (plus bare remote), deleted when dropped.
 struct Fixture {
-    root: PathBuf,
+    root: TempDir,
     work: PathBuf,
     remote: PathBuf,
 }
@@ -57,9 +23,9 @@ struct Fixture {
 impl Fixture {
     /// Creates a repository whose stubbed `scripts/check.sh` exits with `check_status`.
     fn new(check_status: u8) -> Self {
-        let root = claim_dir(&std::env::temp_dir(), unique_names());
-        let work = root.join("work");
-        let remote = root.join("remote.git");
+        let root = TempDir::with_prefix("osrs-mcp-hooks-").unwrap();
+        let work = root.path().join("work");
+        let remote = root.path().join("remote.git");
         fs::create_dir_all(work.join("scripts")).unwrap();
         fs::create_dir(&remote).unwrap();
 
@@ -128,7 +94,7 @@ impl Fixture {
         command
             .env("GIT_CONFIG_GLOBAL", self.global_config())
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("HOME", &self.root)
+            .env("HOME", self.root.path())
             .output()
             .expect("git should start")
     }
@@ -144,7 +110,7 @@ impl Fixture {
     }
 
     fn global_config(&self) -> PathBuf {
-        self.root.join("global.gitconfig")
+        self.root.path().join("global.gitconfig")
     }
 
     fn run_installer(&self, args: &[&str]) -> Output {
@@ -159,7 +125,7 @@ impl Fixture {
         command
             .env("GIT_CONFIG_GLOBAL", self.global_config())
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("HOME", &self.root)
+            .env("HOME", self.root.path())
             .output()
             .expect("installer should start")
     }
@@ -205,12 +171,6 @@ impl Fixture {
         )
         .status
         .success()
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
     }
 }
 
@@ -260,49 +220,6 @@ fn shipped_hooks_are_executable() {
             "{relative} must be executable (mode {mode:o})"
         );
     }
-}
-
-// --- fixture isolation -------------------------------------------------
-
-#[test]
-fn claim_dir_never_touches_a_directory_that_already_exists() {
-    let owner = claim_dir(&std::env::temp_dir(), unique_names());
-    let existing = owner.join("taken");
-    fs::create_dir(&existing).unwrap();
-    fs::write(existing.join("sentinel"), "keep").unwrap();
-
-    let claimed = claim_dir(&owner, ["taken".to_owned(), "free".to_owned()]);
-
-    assert_eq!(claimed, owner.join("free"));
-    assert_eq!(
-        fs::read_to_string(existing.join("sentinel")).unwrap(),
-        "keep"
-    );
-    fs::remove_dir_all(&owner).unwrap();
-}
-
-#[test]
-fn fixtures_use_distinct_private_directories_and_clean_up_on_drop() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let first = Fixture::new(0);
-    let second = Fixture::new(0);
-    assert_ne!(first.root, second.root);
-    let mode = fs::metadata(&first.root).unwrap().permissions().mode();
-    assert_eq!(
-        mode & 0o077,
-        0,
-        "fixture directory must be private (mode {mode:o})"
-    );
-
-    let first_root = first.root.clone();
-    drop(first);
-
-    assert!(
-        !first_root.exists(),
-        "fixture directory should be removed on drop"
-    );
-    assert!(second.root.exists(), "other fixtures must be unaffected");
 }
 
 // --- installer ---------------------------------------------------------

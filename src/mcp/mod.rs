@@ -3,38 +3,30 @@
 //! This module is a thin transport layer. It holds no domain logic; tools
 //! translate library values into protocol responses. All tools are advisory and
 //! read-only.
+//!
+//! Each tool family lives in its own submodule with its own router, and
+//! [`OsrsMcpServer::new`] combines them. Adding a family is one module plus one
+//! `+` in `new`, which keeps unrelated tool changes from conflicting.
+
+mod info;
 
 use rmcp::{
-    Json, ServerHandler, ServiceExt,
+    ServerHandler, ServiceExt,
     handler::server::router::tool::ToolRouter,
     model::{Implementation, ServerCapabilities, ServerConfig},
-    schemars::JsonSchema,
     service::ServerInitializeError,
-    tool, tool_handler, tool_router,
+    tool_handler,
     transport::IntoTransport,
 };
-use serde::Serialize;
 
 use crate::build_info;
+
+pub use info::ServerInfoOutput;
 
 /// Instructions shown to clients that surface server guidance.
 const INSTRUCTIONS: &str = "Read-only advisory server for Old School RuneScape Hardcore \
 worlds. It never performs in-game actions. Call `server_info` to see the version and \
 capabilities.";
-
-/// Structured result of the `server_info` tool.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-pub struct ServerInfoOutput {
-    /// Server package name.
-    pub name: String,
-    /// Server package version (semantic version).
-    pub version: String,
-    /// Always true: the server never modifies game state or local data.
-    pub read_only: bool,
-    /// MCP capability groups this server provides, such as `tools`.
-    pub capabilities: Vec<String>,
-}
 
 /// The OSRS MCP server.
 #[derive(Debug, Clone)]
@@ -48,31 +40,13 @@ impl Default for OsrsMcpServer {
     }
 }
 
-#[tool_router]
 impl OsrsMcpServer {
     /// Creates a server with all tools registered.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            tool_router: Self::tool_router(),
+            tool_router: Self::info_router(),
         }
-    }
-
-    /// Reports this server's name, version, read-only guarantee and capabilities.
-    #[tool(
-        name = "server_info",
-        description = "Report this server's name, version, read-only guarantee and MCP \
-                       capabilities. Deterministic; uses no external data.",
-        annotations(
-            title = "Server information",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    fn server_info() -> Json<ServerInfoOutput> {
-        Json(server_info_output())
     }
 }
 
@@ -81,32 +55,6 @@ impl OsrsMcpServer {
 /// drift apart.
 fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities::builder().enable_tools().build()
-}
-
-/// Names of the capability groups declared in `capabilities`.
-fn capability_names(capabilities: &ServerCapabilities) -> Vec<String> {
-    [
-        ("tools", capabilities.tools.is_some()),
-        ("resources", capabilities.resources.is_some()),
-        ("prompts", capabilities.prompts.is_some()),
-        ("completions", capabilities.completions.is_some()),
-        ("logging", capabilities.logging.is_some()),
-    ]
-    .into_iter()
-    .filter(|&(_, declared)| declared)
-    .map(|(name, _)| name.to_owned())
-    .collect()
-}
-
-/// Builds the `server_info` payload from compile-time package metadata.
-fn server_info_output() -> ServerInfoOutput {
-    let info = build_info();
-    ServerInfoOutput {
-        name: info.name.to_owned(),
-        version: info.version.to_owned(),
-        read_only: true,
-        capabilities: capability_names(&server_capabilities()),
-    }
 }
 
 // The macro generates `async fn call_tool`/`list_tools` bodies that only
