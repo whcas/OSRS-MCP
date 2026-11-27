@@ -23,8 +23,9 @@ macro_rules! skills {
         }
 
         impl Skill {
-            /// The names of every recognised skill, in declaration order.
-            pub const KNOWN_NAMES: &'static [&'static str] = &[$(stringify!($name)),+];
+            /// The names of every recognised skill, for the unit tests only.
+            #[cfg(test)]
+            const KNOWN_NAMES: &'static [&'static str] = &[$(stringify!($name)),+];
 
             /// Parses an exact `RuneLite` skill name; anything else is
             /// [`Skill::Unknown`].
