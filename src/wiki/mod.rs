@@ -10,6 +10,7 @@
 //! - `model`: plain types for a page and its provenance ([`ImportedPage`],
 //!   [`SourceId`]).
 //! - `queue`: rules for the manual page request queue ([`queue::RequestQueue`]).
+//! - `sections`: section paths and bounded chunks for retrieval ([`prepare`]).
 //! - `timestamp`: the export's fixed-shape revision timestamp.
 //!
 //! Wiki types stay independent of MCP, storage and the CLI.
@@ -17,6 +18,7 @@
 mod export;
 mod model;
 pub mod queue;
+mod sections;
 mod timestamp;
 
 pub use export::{
@@ -24,4 +26,8 @@ pub use export::{
     PageIssue, PageIssueKind, XmlFault,
 };
 pub use model::{ExportedHash, ImportedPage, PageId, PageTitle, RevisionId, SourceField, SourceId};
+pub use sections::{
+    Chunk, InvalidLimits, PrepareError, PrepareLimits, PreparedPage, Section, SectionId,
+    SectionPath, prepare,
+};
 pub use timestamp::{InvalidTimestamp, RevisionTimestamp};

@@ -56,7 +56,11 @@ async fn tool_discovery_lists_only_described_read_only_tools_including_server_in
 
     let mut names: Vec<&str> = tools.iter().map(|tool| &*tool.name).collect();
     names.sort_unstable();
-    assert_eq!(names, ["item_search", "server_info"], "tools: {tools:?}");
+    assert_eq!(
+        names,
+        ["item_prices", "item_search", "server_info"],
+        "tools: {tools:?}"
+    );
     for tool in &tools {
         assert!(
             tool.description.is_some(),
