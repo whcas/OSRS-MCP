@@ -161,6 +161,10 @@ impl SearchOutcome {
 }
 
 /// Looks `query` up in `items`. Pure and deterministic.
+///
+/// `items` must contain unique IDs, as guaranteed by
+/// [`HardcoreClient::mapping`](super::HardcoreClient::mapping). An ID lookup
+/// then returns at most one match. Names may repeat across distinct IDs.
 #[must_use]
 pub fn search(items: &[ItemInfo], query: &ItemQuery, limit: ResultLimit) -> SearchOutcome {
     let mut found: Vec<RankedMatch<'_>> = items
@@ -352,7 +356,7 @@ mod tests {
 
         let outcome = search(&items, &name_query("twin"), limit(10));
 
-        // "TWIN" sorts after "Twin" on the original-case tie-break.
+        // "TWIN" sorts before "Twin" on the original-case tie-break.
         assert_eq!(ids(&outcome), [8, 7, 9]);
         assert!(outcome.ambiguous);
     }

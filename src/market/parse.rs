@@ -14,7 +14,7 @@
 //!   JSON leaves this undefined and the API does not produce it.
 //! - Unknown fields are ignored.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -27,6 +27,9 @@ use super::model::{
     Endpoint, ItemInfo, LatestPrices, PriceWindow, Series, SeriesPoint, SideStats, TimedPrice,
     WindowStats,
 };
+
+// Bound each returned name separately from the HTTP body and search result count.
+const MAX_MAPPING_NAME_BYTES: usize = 256;
 
 /// A JSON object whose fields are still raw text.
 #[derive(Deserialize)]
@@ -368,24 +371,41 @@ fn read_series_points(envelope: &Object) -> Result<Vec<SeriesPoint>, MarketDataE
 }
 
 /// Parses a `/mapping` body. Only `id` and `name` are required; the other
-/// fields were observed to be absent for some items.
+/// fields were observed to be absent for some items. IDs must be unique and
+/// names must fit the byte limit.
 pub(super) fn mapping(body: &[u8]) -> Result<Vec<ItemInfo>, MarketDataError> {
     const ENDPOINT: Endpoint = Endpoint::Mapping;
     let entries: Vec<Object> = from_json(ENDPOINT, body)?;
-    entries
-        .iter()
-        .map(|entry| {
-            Ok(ItemInfo {
-                id: ItemId(entry.required(ENDPOINT, "id")?),
-                name: entry.required(ENDPOINT, "name")?,
-                members: entry.optional(ENDPOINT, "members")?,
-                buy_limit: entry.optional(ENDPOINT, "limit")?,
-                value: entry.optional(ENDPOINT, "value")?,
-                low_alchemy: entry.optional(ENDPOINT, "lowalch")?,
-                high_alchemy: entry.optional(ENDPOINT, "highalch")?,
-            })
-        })
-        .collect()
+    let mut ids = BTreeSet::new();
+    let mut items = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let id = ItemId(entry.required(ENDPOINT, "id")?);
+        if !ids.insert(id) {
+            return Err(malformed(
+                ENDPOINT,
+                Some("id"),
+                "item id appears more than once",
+            ));
+        }
+        let name: String = entry.required(ENDPOINT, "name")?;
+        if name.len() > MAX_MAPPING_NAME_BYTES {
+            return Err(malformed(
+                ENDPOINT,
+                Some("name"),
+                "item name exceeds 256 UTF-8 bytes",
+            ));
+        }
+        items.push(ItemInfo {
+            id,
+            name,
+            members: entry.optional(ENDPOINT, "members")?,
+            buy_limit: entry.optional(ENDPOINT, "limit")?,
+            value: entry.optional(ENDPOINT, "value")?,
+            low_alchemy: entry.optional(ENDPOINT, "lowalch")?,
+            high_alchemy: entry.optional(ENDPOINT, "highalch")?,
+        });
+    }
+    Ok(items)
 }
 
 #[cfg(test)]
@@ -639,6 +659,41 @@ mod tests {
     fn mapping_rejects_a_non_array_and_an_entry_without_a_name() {
         assert!(is_malformed(&mapping(br#"{"id":1}"#)));
         assert!(is_malformed(&mapping(br#"[{"id":1}]"#)));
+    }
+
+    #[test]
+    fn mapping_rejects_duplicate_ids_with_a_sanitized_error() {
+        let body = br#"[{"id":2,"name":"Example ammo"},{"id":2,"name":"Other ammo"}]"#;
+        let error = mapping(body).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Hardcore mapping response was malformed: item id appears more than once (field `id`)"
+        );
+    }
+
+    #[test]
+    fn mapping_keeps_distinct_ids_with_the_same_name() {
+        let body = br#"[{"id":2,"name":"Example ammo"},{"id":3,"name":"Example ammo"}]"#;
+        let items = mapping(body).unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, ItemId(2));
+        assert_eq!(items[1].id, ItemId(3));
+        assert_eq!(items[0].name, items[1].name);
+    }
+
+    #[test]
+    fn mapping_limits_names_by_decoded_utf8_bytes() {
+        let name = "é".repeat(128);
+        let at_limit = format!(r#"[{{"id":2,"name":"{name}"}}]"#);
+        let over_limit = format!(r#"[{{"id":2,"name":"{name}x"}}]"#);
+
+        assert_eq!(mapping(at_limit.as_bytes()).unwrap()[0].name, name);
+        assert_eq!(
+            mapping(over_limit.as_bytes()).unwrap_err().to_string(),
+            "Hardcore mapping response was malformed: item name exceeds 256 UTF-8 bytes (field `name`)"
+        );
     }
 
     #[test]

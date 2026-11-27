@@ -501,6 +501,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn old_generic_name_returns_candidates_for_renamed_and_split_items() {
+        let market = FakeMarket::new(Ok(observed(vec![
+            item(2, "Steel cannonball"),
+            item(3, "Granite cannonball"),
+        ])));
+        let client = connect(&market).await;
+
+        let result = call_item_search(&client, json!({ "name": "cannonball" })).await;
+
+        assert_ne!(result.is_error, Some(true), "result: {result:?}");
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(
+            structured["matches"],
+            json!([
+                {"item_id": 3, "name": "Granite cannonball", "match_kind": "substring"},
+                {"item_id": 2, "name": "Steel cannonball", "match_kind": "substring"}
+            ])
+        );
+        assert_eq!(structured["ambiguous"], true);
+        assert_eq!(market.requests(), 1);
+    }
+
+    #[tokio::test]
     async fn invalid_input_is_a_tool_error_and_makes_no_request() {
         let market = FakeMarket::new(Ok(sample_mapping()));
         let client = connect(&market).await;

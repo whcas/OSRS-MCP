@@ -37,10 +37,11 @@ Give exactly one of `item_id` or `name`.
 
 Ranking is exact name, then prefix, then substring. Ties are broken by lowercased
 name, then name, then item id, so the order does not depend on the source order.
+An exact id lookup returns at most one match. Distinct ids can share a name.
 
 ### Example
 
-Request `{"name": "steel cannonball", "limit": 3}`. In an illustrative mapping
+Request `{"name": "steel cannonball", "limit": 3}`. In a synthetic mapping
 that contains a single `Steel cannonball` entry with item id `2`, the tool lists
 that entry first with `match_kind: "exact_name"` and `ambiguous: false`. Searching
 for `cannonball` can return several candidates, so check the names and ids before
@@ -55,3 +56,5 @@ choosing one. Names and matches depend on the current mapping.
   worlds in practice.
 - Search is by name text only. There is no fuzzy or alias matching (for example,
   common abbreviations), and no caching: each call fetches the mapping again.
+- A mapping with repeated item ids or a name over 256 UTF-8 bytes returns a
+  malformed-response error. Names in successful results are returned in full.

@@ -147,7 +147,8 @@ impl HardcoreClient {
         })
     }
 
-    /// Item metadata (`/mapping`).
+    /// Item metadata (`/mapping`) with unique item IDs and names of at most
+    /// 256 UTF-8 bytes. Distinct items can share a name.
     ///
     /// # Errors
     ///

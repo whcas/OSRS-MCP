@@ -15,7 +15,8 @@ pub(super) type MarketFuture<'a, T> =
 /// each performing exactly one request. [`HardcoreClient`] is the production
 /// implementation; tests supply their own fakes.
 pub(super) trait MarketData: std::fmt::Debug + Send + Sync {
-    /// Item metadata for every Hardcore item.
+    /// Item metadata for every Hardcore item. IDs are unique, and each name
+    /// is at most 256 UTF-8 bytes.
     fn mapping(&self) -> MarketFuture<'_, Vec<ItemInfo>>;
 }
 
