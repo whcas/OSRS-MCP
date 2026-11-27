@@ -4,11 +4,14 @@
 //! translate library values into protocol responses. All tools are advisory and
 //! read-only.
 
+use std::collections::BTreeMap;
+
 use rmcp::{
     Json, ServerHandler, ServiceExt,
     handler::server::router::tool::ToolRouter,
-    model::{Implementation, ServerCapabilities, ServerConfig},
+    model::{ErrorData, Implementation, ServerCapabilities, ServerConfig},
     schemars::JsonSchema,
+    serde_json,
     service::ServerInitializeError,
     tool, tool_handler, tool_router,
     transport::IntoTransport,
@@ -71,8 +74,10 @@ impl OsrsMcpServer {
             open_world_hint = false
         )
     )]
-    fn server_info() -> Json<ServerInfoOutput> {
-        Json(server_info_output())
+    fn server_info() -> Result<Json<ServerInfoOutput>, ErrorData> {
+        server_info_output()
+            .map(Json)
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))
     }
 }
 
@@ -83,30 +88,31 @@ fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities::builder().enable_tools().build()
 }
 
-/// Names of the capability groups declared in `capabilities`.
-fn capability_names(capabilities: &ServerCapabilities) -> Vec<String> {
-    [
-        ("tools", capabilities.tools.is_some()),
-        ("resources", capabilities.resources.is_some()),
-        ("prompts", capabilities.prompts.is_some()),
-        ("completions", capabilities.completions.is_some()),
-        ("logging", capabilities.logging.is_some()),
-    ]
-    .into_iter()
-    .filter(|&(_, declared)| declared)
-    .map(|(name, _)| name.to_owned())
-    .collect()
+/// Names of the capability groups declared in `capabilities`, sorted.
+///
+/// Derived from the serialised form, in which an undeclared group is omitted,
+/// so a group added by a future rmcp release is reported without a code change.
+///
+/// # Errors
+///
+/// Returns an error if the capabilities do not serialise to a JSON object,
+/// which would be a bug in the SDK. It is reported rather than turned into an
+/// empty list, so `server_info` never under-reports.
+fn capability_names(capabilities: &ServerCapabilities) -> Result<Vec<String>, serde_json::Error> {
+    let groups: BTreeMap<String, serde_json::Value> =
+        serde_json::from_value(serde_json::to_value(capabilities)?)?;
+    Ok(groups.into_keys().collect())
 }
 
 /// Builds the `server_info` payload from compile-time package metadata.
-fn server_info_output() -> ServerInfoOutput {
+fn server_info_output() -> Result<ServerInfoOutput, serde_json::Error> {
     let info = build_info();
-    ServerInfoOutput {
+    Ok(ServerInfoOutput {
         name: info.name.to_owned(),
         version: info.version.to_owned(),
         read_only: true,
-        capabilities: capability_names(&server_capabilities()),
-    }
+        capabilities: capability_names(&server_capabilities())?,
+    })
 }
 
 // The macro generates `async fn call_tool`/`list_tools` bodies that only
@@ -183,4 +189,65 @@ where
         .await
         .map(|_| ())
         .map_err(|error| ServeError::Connection(Box::new(error)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(capabilities: &ServerCapabilities) -> Vec<String> {
+        capability_names(capabilities).unwrap()
+    }
+
+    #[test]
+    fn no_declared_capabilities_yield_no_names() {
+        assert_eq!(names(&ServerCapabilities::default()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn declared_groups_are_named_and_undeclared_ones_are_not() {
+        let tools_only = ServerCapabilities::builder().enable_tools().build();
+        assert_eq!(names(&tools_only), ["tools"]);
+    }
+
+    #[test]
+    fn every_declared_group_is_reported_including_ones_the_old_table_lacked() {
+        let everything = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .enable_prompts()
+            .enable_completions()
+            .enable_experimental()
+            .build();
+        assert_eq!(
+            names(&everything),
+            [
+                "completions",
+                "experimental",
+                "prompts",
+                "resources",
+                "tools"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_server_advertises_only_the_tools_capability() {
+        assert_eq!(names(&server_capabilities()), ["tools"]);
+    }
+
+    #[test]
+    fn server_info_describes_this_package_as_read_only() {
+        let info = build_info();
+        let output = server_info_output().unwrap();
+        assert_eq!(
+            output,
+            ServerInfoOutput {
+                name: info.name.to_owned(),
+                version: info.version.to_owned(),
+                read_only: true,
+                capabilities: vec!["tools".to_owned()],
+            }
+        );
+    }
 }
