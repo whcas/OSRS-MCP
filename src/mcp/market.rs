@@ -18,6 +18,9 @@ use crate::market::{
 const MAPPING_NOTE: &str = "A match shows the item exists in the Hardcore item mapping. It does \
 not show that the item is actively traded or currently has a price.";
 
+/// Byte limit per item name in the MCP response.
+const MAX_OUTPUT_NAME_BYTES: usize = 256;
+
 /// Arguments of the `item_search` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -179,22 +182,35 @@ struct ItemSearchOutput {
     note: &'static str,
 }
 
-fn item_search_output(provenance: &Provenance, outcome: SearchOutcome) -> ItemSearchOutput {
-    ItemSearchOutput {
+fn item_search_output(
+    provenance: &Provenance,
+    outcome: SearchOutcome,
+) -> Result<ItemSearchOutput, String> {
+    if outcome
+        .matches
+        .iter()
+        .any(|found| found.item.name.len() > MAX_OUTPUT_NAME_BYTES)
+    {
+        return Err(format!(
+            "An item name selected by item_search exceeds {MAX_OUTPUT_NAME_BYTES} UTF-8 bytes"
+        ));
+    }
+
+    Ok(ItemSearchOutput {
         truncated: outcome.truncated(),
         total_matches: outcome.total_matches,
         ambiguous: outcome.ambiguous,
         matches: outcome.matches.into_iter().map(Into::into).collect(),
         source: provenance.into(),
         note: MAPPING_NOTE,
-    }
+    })
 }
 
 /// Runs a validated request against an already-retrieved mapping.
 fn run_item_search(
     mapping: &Observed<Vec<ItemInfo>>,
     request: &ItemSearchRequest,
-) -> ItemSearchOutput {
+) -> Result<ItemSearchOutput, String> {
     let outcome = search(&mapping.value, &request.query, request.limit);
     item_search_output(&mapping.provenance, outcome)
 }
@@ -227,7 +243,7 @@ impl OsrsMcpServer {
             .mapping()
             .await
             .map_err(|error| error.to_string())?;
-        Ok(Json(run_item_search(&mapping, &request)))
+        run_item_search(&mapping, &request).map(Json)
     }
 }
 
@@ -405,7 +421,7 @@ mod tests {
         .into_request()
         .unwrap();
 
-        let output = run_item_search(&sample_mapping(), &request);
+        let output = run_item_search(&sample_mapping(), &request).unwrap();
         let json = serde_json::to_value(&output).unwrap();
 
         assert_eq!(
@@ -448,7 +464,7 @@ mod tests {
         .into_request()
         .unwrap();
 
-        let output = run_item_search(&sample_mapping(), &request);
+        let output = run_item_search(&sample_mapping(), &request).unwrap();
         let json = serde_json::to_value(&output).unwrap();
 
         assert_eq!(
@@ -521,6 +537,29 @@ mod tests {
         );
         assert_eq!(structured["ambiguous"], true);
         assert_eq!(market.requests(), 1);
+    }
+
+    #[tokio::test]
+    async fn only_selected_match_names_are_subject_to_the_output_byte_limit() {
+        let at_limit = format!("Sample {}", "é".repeat(124) + "x");
+        let over_limit = format!("{at_limit}y");
+        assert_eq!(at_limit.len(), 256);
+        let market = FakeMarket::new(Ok(observed(vec![item(2, &at_limit), item(3, &over_limit)])));
+        let client = connect(&market).await;
+
+        for arguments in [json!({"item_id": 2}), json!({"name": "sample", "limit": 1})] {
+            let result = call_item_search(&client, arguments).await;
+            assert_ne!(result.is_error, Some(true));
+            let output = result.structured_content.expect("structured content");
+            assert_eq!(output["matches"][0]["name"], at_limit);
+        }
+
+        let result = call_item_search(&client, json!({"item_id": 3})).await;
+        assert_eq!(
+            error_text(&result),
+            "An item name selected by item_search exceeds 256 UTF-8 bytes"
+        );
+        assert_eq!(market.requests(), 3);
     }
 
     #[tokio::test]

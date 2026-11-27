@@ -28,9 +28,6 @@ use super::model::{
     WindowStats,
 };
 
-// Bound each returned name separately from the HTTP body and search result count.
-const MAX_MAPPING_NAME_BYTES: usize = 256;
-
 /// A JSON object whose fields are still raw text.
 #[derive(Deserialize)]
 #[serde(transparent)]
@@ -371,41 +368,37 @@ fn read_series_points(envelope: &Object) -> Result<Vec<SeriesPoint>, MarketDataE
 }
 
 /// Parses a `/mapping` body. Only `id` and `name` are required; the other
-/// fields were observed to be absent for some items. IDs must be unique and
-/// names must fit the byte limit.
+/// fields were observed to be absent for some items. IDs must be unique.
 pub(super) fn mapping(body: &[u8]) -> Result<Vec<ItemInfo>, MarketDataError> {
     const ENDPOINT: Endpoint = Endpoint::Mapping;
     let entries: Vec<Object> = from_json(ENDPOINT, body)?;
     let mut ids = BTreeSet::new();
     let mut items = Vec::with_capacity(entries.len());
     for entry in entries {
-        let id = ItemId(entry.required(ENDPOINT, "id")?);
-        if !ids.insert(id) {
+        let item = read_mapping_item(&entry)?;
+        if !ids.insert(item.id) {
             return Err(malformed(
                 ENDPOINT,
                 Some("id"),
                 "item id appears more than once",
             ));
         }
-        let name: String = entry.required(ENDPOINT, "name")?;
-        if name.len() > MAX_MAPPING_NAME_BYTES {
-            return Err(malformed(
-                ENDPOINT,
-                Some("name"),
-                "item name exceeds 256 UTF-8 bytes",
-            ));
-        }
-        items.push(ItemInfo {
-            id,
-            name,
-            members: entry.optional(ENDPOINT, "members")?,
-            buy_limit: entry.optional(ENDPOINT, "limit")?,
-            value: entry.optional(ENDPOINT, "value")?,
-            low_alchemy: entry.optional(ENDPOINT, "lowalch")?,
-            high_alchemy: entry.optional(ENDPOINT, "highalch")?,
-        });
+        items.push(item);
     }
     Ok(items)
+}
+
+fn read_mapping_item(entry: &Object) -> Result<ItemInfo, MarketDataError> {
+    const ENDPOINT: Endpoint = Endpoint::Mapping;
+    Ok(ItemInfo {
+        id: ItemId(entry.required(ENDPOINT, "id")?),
+        name: entry.required(ENDPOINT, "name")?,
+        members: entry.optional(ENDPOINT, "members")?,
+        buy_limit: entry.optional(ENDPOINT, "limit")?,
+        value: entry.optional(ENDPOINT, "value")?,
+        low_alchemy: entry.optional(ENDPOINT, "lowalch")?,
+        high_alchemy: entry.optional(ENDPOINT, "highalch")?,
+    })
 }
 
 #[cfg(test)]
@@ -684,16 +677,13 @@ mod tests {
     }
 
     #[test]
-    fn mapping_limits_names_by_decoded_utf8_bytes() {
-        let name = "é".repeat(128);
-        let at_limit = format!(r#"[{{"id":2,"name":"{name}"}}]"#);
-        let over_limit = format!(r#"[{{"id":2,"name":"{name}x"}}]"#);
+    fn mapping_preserves_names_longer_than_the_tool_output_limit() {
+        let name = "é".repeat(129);
+        let body = format!(r#"[{{"id":2,"name":"{name}"}},{{"id":3,"name":"Other ammo"}}]"#);
 
-        assert_eq!(mapping(at_limit.as_bytes()).unwrap()[0].name, name);
-        assert_eq!(
-            mapping(over_limit.as_bytes()).unwrap_err().to_string(),
-            "Hardcore mapping response was malformed: item name exceeds 256 UTF-8 bytes (field `name`)"
-        );
+        let items = mapping(body.as_bytes()).unwrap();
+        assert_eq!(items[0].name, name);
+        assert_eq!(items[1].id, ItemId(3));
     }
 
     #[test]

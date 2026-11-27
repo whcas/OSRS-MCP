@@ -56,5 +56,7 @@ choosing one. Names and matches depend on the current mapping.
   worlds in practice.
 - Search is by name text only. There is no fuzzy or alias matching (for example,
   common abbreviations), and no caching: each call fetches the mapping again.
-- A mapping with repeated item ids or a name over 256 UTF-8 bytes returns a
-  malformed-response error. Names in successful results are returned in full.
+- A mapping with repeated item ids returns a malformed-response error.
+- A name over 256 UTF-8 bytes returns a tool error if its match was selected
+  for the response. Other lookups can still use the same mapping. Names in
+  successful results are returned in full.
