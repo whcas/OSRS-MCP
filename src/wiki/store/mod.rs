@@ -169,8 +169,10 @@ impl ImportSession<'_> {
     ///
     /// Fails if the page cannot be prepared within the limits, if the store has
     /// a newer or conflicting revision of it, or on a database error. A failed
-    /// page is not stored; the earlier pages of the session still are, until
-    /// the session is dropped without a commit.
+    /// page is not stored at all, even when the failure came after part of it
+    /// was written: each page is written in a savepoint. The earlier pages of
+    /// the session still are stored, until the session is dropped without a
+    /// commit, and the session may go on.
     pub fn add(&mut self, page: &ImportedPage) -> Result<PageOutcome, StoreError> {
         let prepared = prepare(page, &self.limits).map_err(|source| StoreError::Prepare {
             page: page.id.get(),
@@ -199,24 +201,38 @@ impl ImportSession<'_> {
         Ok(self.summary)
     }
 
+    /// Writes one page inside a savepoint, so that a failure partway through
+    /// (after the page row changed, or the old chunks were deleted) is undone
+    /// and the session can still be committed without a half-written page.
     fn apply(
-        &self,
+        &mut self,
         outcome: PageOutcome,
         page: &ImportedPage,
         prepared: &PreparedPage,
     ) -> Result<(), StoreError> {
+        if outcome == PageOutcome::Unchanged {
+            return Ok(());
+        }
+        let source_key = self.source_key;
+        let savepoint = self
+            .transaction
+            .savepoint()
+            .map_err(StoreError::database(Operation::Write))?;
         match outcome {
-            PageOutcome::Unchanged => Ok(()),
+            PageOutcome::Unchanged => {}
             PageOutcome::Added => {
-                insert_page(&self.transaction, self.source_key, page)?;
-                insert_chunks(&self.transaction, self.source_key, prepared)
+                insert_page(&savepoint, source_key, page)?;
+                insert_chunks(&savepoint, source_key, prepared)?;
             }
             PageOutcome::Replaced => {
-                update_page(&self.transaction, self.source_key, page)?;
-                delete_chunks(&self.transaction, self.source_key, page.id)?;
-                insert_chunks(&self.transaction, self.source_key, prepared)
+                update_page(&savepoint, source_key, page)?;
+                delete_chunks(&savepoint, source_key, page.id)?;
+                insert_chunks(&savepoint, source_key, prepared)?;
             }
         }
+        savepoint
+            .commit()
+            .map_err(StoreError::database(Operation::Write))
     }
 }
 
@@ -393,11 +409,11 @@ fn stored_state(
 }
 
 fn insert_page(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     source_key: i64,
     page: &ImportedPage,
 ) -> Result<(), StoreError> {
-    transaction
+    connection
         .execute(
             "INSERT INTO page (source_id, page_id, namespace, title, revision_id,
                                revision_time, revision_seconds, hash, redirect_target, text)
@@ -409,11 +425,11 @@ fn insert_page(
 }
 
 fn update_page(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     source_key: i64,
     page: &ImportedPage,
 ) -> Result<(), StoreError> {
-    transaction
+    connection
         .execute(
             "UPDATE page SET namespace = ?3, title = ?4, revision_id = ?5, revision_time = ?6,
                              revision_seconds = ?7, hash = ?8, redirect_target = ?9, text = ?10
@@ -452,12 +468,8 @@ fn page_params(source_key: i64, page: &ImportedPage) -> Result<PageParams<'_>, S
     ))
 }
 
-fn delete_chunks(
-    transaction: &Transaction<'_>,
-    source_key: i64,
-    page: PageId,
-) -> Result<(), StoreError> {
-    transaction
+fn delete_chunks(connection: &Connection, source_key: i64, page: PageId) -> Result<(), StoreError> {
+    connection
         .execute(
             "DELETE FROM chunk WHERE source_id = ?1 AND page_id = ?2",
             params![source_key, id_to_sql(page.get())?],
@@ -467,12 +479,12 @@ fn delete_chunks(
 }
 
 fn insert_chunks(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     source_key: i64,
     prepared: &PreparedPage,
 ) -> Result<(), StoreError> {
     let write = StoreError::database(Operation::Write);
-    let mut statement = transaction
+    let mut statement = connection
         .prepare(
             "INSERT INTO chunk (source_id, page_id, section_index, chunk_index, section_path,
                                 section_occurrence, section_level, source_start, source_end,
@@ -967,6 +979,60 @@ mod tests {
         drop(session);
         assert_eq!(revision_of(&store, &fixture.source, 1), None);
         assert_eq!(revision_of(&store, &fixture.source, 2), Some(20));
+    }
+
+    /// Makes the insert of any chunk whose text is `boom` fail, which happens
+    /// after the page row has been written or replaced.
+    fn fail_chunk_writes_of_boom(store: &Store) {
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER forced_failure BEFORE INSERT ON chunk WHEN new.text = 'boom'
+                 BEGIN SELECT RAISE(ABORT, 'forced'); END;",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_chunk_write_failing_after_the_page_write_stores_nothing_of_that_page() {
+        let fixture = Fixture::new();
+        let mut store = fixture.open();
+        fail_chunk_writes_of_boom(&store);
+        let mut session = store
+            .begin_import(&fixture.source, PrepareLimits::default())
+            .unwrap();
+        session.add(&page(1, 10, "first")).unwrap();
+        let failure = session.add(&page(2, 20, "boom")).unwrap_err();
+        assert!(matches!(
+            failure,
+            StoreError::Database {
+                operation: Operation::Write,
+                ..
+            }
+        ));
+        session.add(&page(3, 30, "third")).unwrap();
+        let summary = session.commit().unwrap();
+        assert_eq!(summary.added, 2);
+        assert_eq!(revision_of(&store, &fixture.source, 2), None);
+        assert_eq!(texts(&store, &fixture.source, 2).len(), 0);
+        assert_eq!(texts(&store, &fixture.source, 1), ["first"]);
+        assert_eq!(texts(&store, &fixture.source, 3), ["third"]);
+    }
+
+    #[test]
+    fn a_failed_replacement_keeps_the_old_page_and_chunks_after_commit() {
+        let fixture = Fixture::new();
+        let mut store = fixture.open();
+        import(&mut store, &fixture.source, &[page(5, 50, "old")]);
+        fail_chunk_writes_of_boom(&store);
+        let mut session = store
+            .begin_import(&fixture.source, PrepareLimits::default())
+            .unwrap();
+        assert!(session.add(&page(5, 60, "boom")).is_err());
+        let summary = session.commit().unwrap();
+        assert_eq!(summary.replaced, 0);
+        assert_eq!(revision_of(&store, &fixture.source, 5), Some(50));
+        assert_eq!(texts(&store, &fixture.source, 5), ["old"]);
     }
 
     #[test]
