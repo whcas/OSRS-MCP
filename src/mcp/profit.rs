@@ -626,7 +626,7 @@ mod tests {
 
     async fn connect() -> RunningService<RoleClient, ()> {
         let (client_io, server_io) = tokio::io::duplex(16 * 1024);
-        let server = OsrsMcpServer::new();
+        let server = OsrsMcpServer::new().expect("server should be configured");
         tokio::spawn(async move {
             if let Ok(running) = server.serve(server_io).await {
                 let _ = running.waiting().await;

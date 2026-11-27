@@ -15,6 +15,7 @@ async fn connect() -> (RunningService<RoleClient, ()>, JoinHandle<()>) {
     let (client_io, server_io) = tokio::io::duplex(8192);
     let server = tokio::spawn(async move {
         let running = OsrsMcpServer::new()
+            .expect("server should be configured")
             .serve(server_io)
             .await
             .expect("server should initialise");
@@ -57,7 +58,7 @@ async fn tool_discovery_lists_only_described_read_only_tools_including_server_in
     names.sort_unstable();
     assert_eq!(
         names,
-        ["calculate_profit", "server_info"],
+        ["calculate_profit", "item_search", "server_info"],
         "tools: {tools:?}"
     );
     for tool in &tools {
