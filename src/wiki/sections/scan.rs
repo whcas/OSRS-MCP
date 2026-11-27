@@ -4,6 +4,11 @@
 //! comments, raw-text tags and template calls are not headings, so the scanner
 //! tracks just enough state to know that. It never expands, renders or executes
 //! anything.
+//!
+//! Known limits, deliberately not worked around because that would need a
+//! renderer: a `>` inside a quoted tag attribute ends the tag early, an opening
+//! tag split across lines is not recognised, and brace counting treats `{{{`
+//! parameters like template calls.
 
 use std::ops::Range;
 
@@ -39,20 +44,27 @@ struct ScanState {
     template_depth: usize,
 }
 
-/// There are more headings than the caller allows.
+/// Longest heading title kept, in bytes. Real headings are a few dozen bytes;
+/// the bound stops every section path from carrying an enormous title.
+pub(super) const MAX_HEADING_BYTES: usize = 512;
+
+/// Why headings could not be collected within the limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TooManyHeadings;
+pub(super) enum ScanError {
+    /// There are more headings than the caller allows.
+    TooManyHeadings,
+    /// A heading title is longer than [`MAX_HEADING_BYTES`].
+    HeadingTooLong,
+}
 
 /// Returns the headings of `text` in document order.
 ///
 /// # Errors
 ///
-/// Returns [`TooManyHeadings`] if there are more than `max_headings`, without
-/// scanning further.
-pub(super) fn find_headings(
-    text: &str,
-    max_headings: usize,
-) -> Result<Vec<Heading>, TooManyHeadings> {
+/// Returns [`ScanError::TooManyHeadings`] if there are more than `max_headings`
+/// and [`ScanError::HeadingTooLong`] if a title exceeds [`MAX_HEADING_BYTES`],
+/// without scanning further.
+pub(super) fn find_headings(text: &str, max_headings: usize) -> Result<Vec<Heading>, ScanError> {
     let mut headings = Vec::new();
     let mut state = ScanState {
         region: Region::Plain,
@@ -65,7 +77,10 @@ pub(super) fn find_headings(
         let at_top_level = state.region == Region::Plain && state.template_depth == 0;
         if let Some((level, title)) = parse_heading(line).filter(|_| at_top_level) {
             if headings.len() >= max_headings {
-                return Err(TooManyHeadings);
+                return Err(ScanError::TooManyHeadings);
+            }
+            if title.len() > MAX_HEADING_BYTES {
+                return Err(ScanError::HeadingTooLong);
             }
             headings.push(Heading {
                 level,
@@ -185,11 +200,13 @@ fn find_closing_tag(rest: &[u8], name: &str) -> Option<usize> {
     let mut index = 0;
     while let Some(found) = find(&rest[index..], b"</") {
         let start = index + found;
-        let name_range = start + 2..start + 2 + name.len();
-        if rest
-            .get(name_range)
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name.as_bytes()))
-        {
+        let name_end = start + 2 + name.len();
+        let names_the_tag = rest
+            .get(start + 2..name_end)
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name.as_bytes()));
+        // `</nowikix>` is another tag, so a delimiter must follow the name.
+        let delimited = matches!(rest.get(name_end), None | Some(b'>' | b' ' | b'\t'));
+        if names_the_tag && delimited {
             return Some(
                 rest[start..]
                     .iter()
@@ -301,6 +318,22 @@ mod tests {
     }
 
     #[test]
+    fn a_closing_tag_must_match_the_whole_tag_name() {
+        let text = "<nowiki>\n</nowikix>\n== Still hidden ==\n</nowiki>\n== Shown ==\n";
+        assert_eq!(headings(text), [titled(2, "Shown")]);
+        let spaced = "<pre>\n</pre >\n== Shown ==\n";
+        assert_eq!(headings(spaced), [titled(2, "Shown")]);
+    }
+
+    #[test]
+    fn a_heading_title_longer_than_the_bound_is_an_error() {
+        let at_limit = format!("== {} ==\n", "a".repeat(MAX_HEADING_BYTES));
+        let over = format!("== {} ==\n", "a".repeat(MAX_HEADING_BYTES + 1));
+        assert!(find_headings(&at_limit, 10).is_ok());
+        assert_eq!(find_headings(&over, 10), Err(ScanError::HeadingTooLong));
+    }
+
+    #[test]
     fn a_self_closing_literal_tag_does_not_open_a_region() {
         assert_eq!(headings("<nowiki />\n== Shown ==\n"), [titled(2, "Shown")]);
     }
@@ -341,6 +374,6 @@ mod tests {
     fn too_many_headings_is_an_error_instead_of_unbounded_growth() {
         let text = "= a =\n= b =\n= c =\n";
         assert_eq!(find_headings(text, 3).map(|found| found.len()), Ok(3));
-        assert_eq!(find_headings(text, 2), Err(TooManyHeadings));
+        assert_eq!(find_headings(text, 2), Err(ScanError::TooManyHeadings));
     }
 }

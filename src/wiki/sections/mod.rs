@@ -19,6 +19,10 @@
 //!   Nothing is expanded, rendered, summarised or rewritten, so no text or
 //!   number can appear that the page did not contain. Markup, templates and
 //!   links stay raw. The raw text itself stays on the [`ImportedPage`].
+//! - Heading titles over 512 bytes are an error ([`PrepareError::HeadingTooLong`]),
+//!   and a chunk refers to its section by position, so the size of a prepared
+//!   page is bounded by the text plus at most 2000 sections of at most six
+//!   short titles each, not by chunks times path length.
 //! - A section is never mixed with its neighbours: a chunk belongs to exactly
 //!   one section. Chunks prefer paragraph, then line boundaries, and cut inside
 //!   a line only when one line exceeds the bound ([`Chunk::cuts_line`]).
@@ -39,7 +43,7 @@ use std::ops::Range;
 use thiserror::Error;
 
 use super::{ImportedPage, PageId, PageTitle, RevisionId};
-use scan::Heading;
+use scan::{Heading, ScanError};
 
 const DEFAULT_MAX_CHUNK_BYTES: usize = 2000;
 const DEFAULT_MAX_SECTIONS: usize = 2000;
@@ -127,12 +131,28 @@ pub enum PrepareError {
         /// The configured limit.
         max: usize,
     },
+    /// A heading title is longer than the fixed limit, which keeps section
+    /// paths small.
+    #[error("a section heading is longer than {max} bytes")]
+    HeadingTooLong {
+        /// The limit, in bytes.
+        max: usize,
+    },
 }
 
 /// The titles of a section's enclosing headings, outermost first. The lead
 /// section's path is empty.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct SectionPath(Vec<String>);
+
+impl fmt::Debug for SectionPath {
+    /// Shows the depth only: titles are untrusted export text, and `Debug`
+    /// output ends up in logs and failed-assertion messages. Use `Display` to
+    /// print a path deliberately.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "SectionPath(depth {})", self.0.len())
+    }
+}
 
 impl SectionPath {
     /// The heading titles, outermost first, as written (markup is not removed).
@@ -183,10 +203,15 @@ pub struct Section {
 }
 
 /// A bounded retrieval unit: verbatim wikitext from one section.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A chunk refers to its section by position instead of owning a copy of its
+/// path, so the size of a prepared page stays proportional to the text. Its
+/// `Debug` output omits the text.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Chunk {
-    /// The section the text comes from.
-    pub section: SectionId,
+    /// Position of the section the text comes from in
+    /// [`PreparedPage::sections`]. Use [`PreparedPage::section_of`].
+    pub section: usize,
     /// The position of this chunk among its section's chunks, from zero.
     pub index: usize,
     /// The byte range of the text within the page's wikitext.
@@ -196,6 +221,20 @@ pub struct Chunk {
     /// Whether an edge of the chunk falls inside a line, because that line was
     /// longer than the chunk bound.
     pub cuts_line: bool,
+}
+
+impl fmt::Debug for Chunk {
+    /// Omits the wikitext, like [`ImportedPage`](super::ImportedPage).
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Chunk")
+            .field("section", &self.section)
+            .field("index", &self.index)
+            .field("source", &self.source)
+            .field("text_bytes", &self.text.len())
+            .field("cuts_line", &self.cuts_line)
+            .finish()
+    }
 }
 
 /// A page split into sections and chunks, with the provenance to cite them.
@@ -213,6 +252,15 @@ pub struct PreparedPage {
     pub sections: Vec<Section>,
     /// Chunks in document order. Empty for a redirect.
     pub chunks: Vec<Chunk>,
+}
+
+impl PreparedPage {
+    /// The section a chunk of this page belongs to, or `None` if the chunk is
+    /// from another page.
+    #[must_use]
+    pub fn section_of(&self, chunk: &Chunk) -> Option<&Section> {
+        self.sections.get(chunk.section)
+    }
 }
 
 /// Splits a page into sections and bounded chunks.
@@ -246,11 +294,17 @@ pub fn prepare(page: &ImportedPage, limits: &PrepareLimits) -> Result<PreparedPa
 /// included even when empty, so every page has at least one section.
 fn split_sections(text: &str, limits: &PrepareLimits) -> Result<Vec<Section>, PrepareError> {
     // The lead takes one of the allowed sections.
-    let headings = scan::find_headings(text, limits.max_sections().saturating_sub(1)).map_err(
-        |scan::TooManyHeadings| PrepareError::TooManySections {
-            max: limits.max_sections(),
-        },
-    )?;
+    let headings =
+        scan::find_headings(text, limits.max_sections().saturating_sub(1)).map_err(|error| {
+            match error {
+                ScanError::TooManyHeadings => PrepareError::TooManySections {
+                    max: limits.max_sections(),
+                },
+                ScanError::HeadingTooLong => PrepareError::HeadingTooLong {
+                    max: scan::MAX_HEADING_BYTES,
+                },
+            }
+        })?;
     let mut builder = SectionBuilder::default();
     let lead_end = headings
         .first()
@@ -308,16 +362,17 @@ impl SectionBuilder {
 fn chunk_sections(text: &str, sections: &[Section], limits: &PrepareLimits) -> Vec<Chunk> {
     sections
         .iter()
-        .flat_map(|section| {
+        .enumerate()
+        .flat_map(|(section_index, section)| {
             let body = &text[section.body.clone()];
             chunk::split(body, limits.max_chunk_bytes())
                 .into_iter()
                 .enumerate()
-                .map(|(index, piece)| {
+                .map(move |(index, piece)| {
                     let source = section.body.start + piece.range.start
                         ..section.body.start + piece.range.end;
                     Chunk {
-                        section: section.id.clone(),
+                        section: section_index,
                         index,
                         text: text[source.clone()].to_owned(),
                         source,
@@ -377,7 +432,8 @@ mod tests {
         assert_eq!(paths(&result), ["(lead)", "First"]);
         assert!(result.sections[0].body.is_empty());
         assert_eq!(result.chunks.len(), 1);
-        assert_eq!(result.chunks[0].section.path.to_string(), "First");
+        let section = result.section_of(&result.chunks[0]).unwrap();
+        assert_eq!(section.id.path.to_string(), "First");
     }
 
     #[test]
@@ -477,7 +533,7 @@ mod tests {
         let sections: Vec<String> = result
             .chunks
             .iter()
-            .map(|chunk| chunk.section.path.to_string())
+            .map(|chunk| result.sections[chunk.section].id.path.to_string())
             .collect();
         assert_eq!(sections, ["(lead)", "A", "B"]);
     }
@@ -502,7 +558,12 @@ mod tests {
         let indexes: Vec<(String, usize)> = result
             .chunks
             .iter()
-            .map(|chunk| (chunk.section.path.to_string(), chunk.index))
+            .map(|chunk| {
+                (
+                    result.sections[chunk.section].id.path.to_string(),
+                    chunk.index,
+                )
+            })
             .collect();
         assert_eq!(
             indexes,
@@ -563,6 +624,37 @@ mod tests {
             (default.max_chunk_bytes(), default.max_sections()),
             (2000, 2000)
         );
+    }
+
+    #[test]
+    fn a_page_with_a_huge_heading_and_many_chunks_cannot_multiply_the_path() {
+        // The heading is refused, so no path can be larger than the bound,
+        // and chunks hold an index, not a copy of the path.
+        let long_title = "t".repeat(600);
+        let text = format!("== {long_title} ==\n{}", "word ".repeat(2000));
+        assert_eq!(
+            prepare(&page(&text), &limits(8, 10)),
+            Err(PrepareError::HeadingTooLong { max: 512 })
+        );
+
+        let title = "t".repeat(512);
+        let text = format!("== {title} ==\n{}", "word ".repeat(2000));
+        let result = prepare(&page(&text), &limits(8, 10)).unwrap();
+        assert!(result.chunks.len() > 1000);
+        assert!(result.chunks.iter().all(|chunk| chunk.section == 1));
+        assert_eq!(result.section_of(&result.chunks[0]).unwrap().level, 2);
+    }
+
+    #[test]
+    fn debug_output_omits_wikitext_titles_and_headings() {
+        let text = "lead SECRETMARKER\n== Heading SECRETMARKER ==\nbody SECRETMARKER";
+        let mut source = page(text);
+        source.redirect_target = None;
+        let result = prepare(&source, &PrepareLimits::default()).unwrap();
+        let debug = format!("{result:?}");
+        assert!(!debug.contains("SECRETMARKER"), "{debug}");
+        assert!(!format!("{:?}", result.chunks[0]).contains("SECRETMARKER"));
+        assert!(!format!("{:?}", result.sections[1].id).contains("SECRETMARKER"));
     }
 
     #[test]
