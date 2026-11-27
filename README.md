@@ -26,7 +26,7 @@ Provide LLM clients with reliable, efficient access to game knowledge, live Hard
 
 ## Development status
 
-Early development. A minimal read-only MCP server (`osrs-mcp serve`, stdio transport) exposes a single `server_info` tool; no OSRS functionality is implemented yet. Initial milestones are Rust tooling and CI, a minimal MCP server, verification in Claude and ChatGPT, and investigation of Wiki acquisition and licensing. SQLite and local section-based retrieval are proposed directions, not settled implementation requirements.
+Early development. A minimal read-only MCP server (`osrs-mcp serve`, stdio transport) exposes `server_info` and the first market tools, `item_search` and `item_prices`; further OSRS functionality is not implemented yet. Initial milestones are Rust tooling and CI, a minimal MCP server, verification in Claude and ChatGPT, and investigation of Wiki acquisition and licensing. SQLite and local section-based retrieval are proposed directions, not settled implementation requirements.
 
 ## Contributing
 
@@ -70,6 +70,9 @@ The `sleep` keeps stdin open long enough for the server to answer before it sees
 | Tool | Description |
 | --- | --- |
 | `server_info` | Read-only. Returns the server name, version, read-only guarantee and MCP capabilities. Uses no external data. |
+| `character_summary` | Read-only. Skill levels and experience from the local RuneLite Character Exporter file, with the exporter timestamp and import warnings. Needs `OSRS_MCP_RUNELITE_EXPORT_DIR`; see [docs/local-exports.md](docs/local-exports.md). |
+| `item_search` | Read-only. Finds Hardcore items by id or name, with source and retrieval time. One request to the Hardcore prices API per call. See [docs/market-tools.md](docs/market-tools.md). |
+| `item_prices` | Read-only. Latest observed Hardcore instant-buy and instant-sell trades for one item id, each with price, trade time, age and per-side freshness, plus source and retrieval time. One request per call. See [docs/market-tools.md](docs/market-tools.md). |
 
 ## Development
 

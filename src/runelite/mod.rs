@@ -1,6 +1,7 @@
 //! Import of `RuneLite` account exports.
 //!
-//! Supports `character.json` ([`parse_character_export`]) and `quests.json`
+//! Supports `character.json` ([`parse_character_export`]), bank, inventory and
+//! equipment exports ([`parse_container_export`]) and `quests.json`
 //! ([`parse_quest_export`]) from the Character State Exporter plugin. The
 //! formats are recorded in `docs/research/`.
 //!
@@ -10,6 +11,7 @@
 //! bounded reader that supplies those bytes from a configured directory.
 
 mod character;
+mod container;
 mod experience;
 mod quest;
 mod skill;
@@ -19,6 +21,10 @@ mod timestamp;
 pub use character::{
     CharacterExport, CharacterParseError, SkillRecord, SkillValueProblem, Warning,
     parse_character_export,
+};
+pub use container::{
+    ContainerKind, ContainerParseError, ContainerRow, ContainerSnapshot, ContainerWarning,
+    MAX_CONTAINER_EXPORT_BYTES, MAX_CONTAINER_ROWS, parse_container_export,
 };
 pub use experience::{MAX_EXPERIENCE, MAX_LEVEL, level_for_experience};
 pub use quest::{

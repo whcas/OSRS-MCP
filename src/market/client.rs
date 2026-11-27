@@ -147,7 +147,8 @@ impl HardcoreClient {
         })
     }
 
-    /// Item metadata (`/mapping`).
+    /// Item metadata (`/mapping`) with unique item IDs. Distinct items can
+    /// share a name.
     ///
     /// # Errors
     ///
