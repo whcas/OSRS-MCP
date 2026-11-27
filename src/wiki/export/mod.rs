@@ -31,7 +31,10 @@
 //!   resolved, CDATA taken literally, line endings normalised to `\n`.
 //! - **Duplicates:** if a page id appears again, the first page is kept and the
 //!   later one is reported as [`PageIssueKind::DuplicatePage`].
-//! - **Content after the root's closing tag is ignored.**
+//! - **The whole input is read.** After the root's closing tag only whitespace,
+//!   comments and processing instructions may follow; anything else, or
+//!   malformed or over-limit data, is an error, so an import is complete only
+//!   at the end of the input.
 //!
 //! # Errors versus issues
 //!
@@ -48,7 +51,8 @@
 //! and the nesting depth, with defaults far above any real export. Document
 //! type declarations are refused outright, so no entity is ever defined or
 //! expanded, and nothing external is loaded. Errors contain byte offsets, page
-//! ordinals and numeric ids only, never text from the file.
+//! ordinals and numeric ids only, never text from the file, and the `Debug`
+//! output of readers and pages shows lengths instead of titles and text.
 //!
 //! Page and input limits are enforced as bytes are read, so an oversized
 //! element is never buffered in full. They end the import, because the rest of
