@@ -38,10 +38,27 @@ enum Region {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ScanState {
+pub(super) struct ScanState {
     region: Region,
     /// How many `{{` are open. Template arguments may span lines.
     template_depth: usize,
+}
+
+impl ScanState {
+    /// The state at the start of a text: no comment, literal tag or template
+    /// is open.
+    pub(super) const fn new() -> Self {
+        Self {
+            region: Region::Plain,
+            template_depth: 0,
+        }
+    }
+
+    /// Whether the next byte is outside every comment, literal tag and
+    /// template call.
+    pub(super) fn is_top_level(&self) -> bool {
+        self.region == Region::Plain && self.template_depth == 0
+    }
 }
 
 /// Longest heading title kept, in bytes. Real headings are a few dozen bytes;
@@ -66,16 +83,12 @@ pub(super) enum ScanError {
 /// without scanning further.
 pub(super) fn find_headings(text: &str, max_headings: usize) -> Result<Vec<Heading>, ScanError> {
     let mut headings = Vec::new();
-    let mut state = ScanState {
-        region: Region::Plain,
-        template_depth: 0,
-    };
+    let mut state = ScanState::new();
     let mut offset = 0;
     for raw_line in text.split_inclusive('\n') {
         let line_end = offset + raw_line.len();
         let line = raw_line.trim_end_matches('\n').trim_end_matches('\r');
-        let at_top_level = state.region == Region::Plain && state.template_depth == 0;
-        if let Some((level, title)) = parse_heading(line).filter(|_| at_top_level) {
+        if let Some((level, title)) = parse_heading(line).filter(|_| state.is_top_level()) {
             if headings.len() >= max_headings {
                 return Err(ScanError::TooManyHeadings);
             }
@@ -125,7 +138,7 @@ fn strip_trailing_comments(mut line: &str) -> &str {
 }
 
 /// Updates the state for the text of one line.
-fn advance(state: &mut ScanState, line: &str) {
+pub(super) fn advance(state: &mut ScanState, line: &str) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {

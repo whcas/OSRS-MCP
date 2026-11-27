@@ -25,7 +25,7 @@ pub use export::{
 };
 pub use model::{ExportedHash, ImportedPage, PageId, PageTitle, RevisionId, SourceField, SourceId};
 pub use sections::{
-    Chunk, InvalidLimits, PrepareError, PrepareLimits, PreparedPage, Section, SectionId,
+    Chunk, InvalidLimits, Loss, PrepareError, PrepareLimits, PreparedPage, Section, SectionId,
     SectionPath, prepare,
 };
 pub use timestamp::{InvalidTimestamp, RevisionTimestamp};

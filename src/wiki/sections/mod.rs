@@ -24,8 +24,16 @@
 //!   page is bounded by the text plus at most 2000 sections of at most six
 //!   short titles each, not by chunks times path length.
 //! - A section is never mixed with its neighbours: a chunk belongs to exactly
-//!   one section. Chunks prefer paragraph, then line boundaries, and cut inside
-//!   a line only when one line exceeds the bound ([`Chunk::cuts_line`]).
+//!   one section. Chunks prefer paragraph boundaries, then boundaries between
+//!   blocks: lines, list items, table rows and multi-line template calls are
+//!   kept whole when they fit, and a table that fits is kept whole too. They cut
+//!   between the lines of one block only when it exceeds the bound, and inside
+//!   a line only when one line does.
+//! - A caveat (a line opening with `Note:`, `Notes:`, `Note that`, `However`
+//!   or a `<ref` footnote) is kept in the chunk of the claim before it when the
+//!   two fit together. Where a boundary still falls inside a table, markup,
+//!   line or between a claim and its caveat, both neighbouring chunks list the
+//!   matching [`Loss`].
 //! - A redirect page has no sections or chunks; its target is carried on the
 //!   [`PreparedPage`].
 //!
@@ -34,6 +42,7 @@
 
 mod chunk;
 mod scan;
+mod structure;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -202,6 +211,25 @@ pub struct Section {
     pub body: Range<usize>,
 }
 
+/// What a chunk boundary or the chunk's content leaves out, so that a reader
+/// knows the text may mislead on its own. Only the boundaries are listed:
+/// chunks are verbatim, so nothing inside them is altered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Loss {
+    /// An edge of the chunk falls inside a line, because that line was longer
+    /// than the chunk bound. Markup on that line may be cut in two.
+    CutLine,
+    /// An edge falls between the lines of one multi-line template call,
+    /// comment or literal tag, which was too long to keep whole.
+    SplitMarkup,
+    /// An edge falls between two parts of one table, so rows may lack the
+    /// table's header or the rest of the table.
+    SplitTable,
+    /// An edge separates a caveat (see the module documentation) from the
+    /// claim before it, because the two did not fit in one chunk.
+    SplitCaveat,
+}
+
 /// A bounded retrieval unit: verbatim wikitext from one section.
 ///
 /// A chunk refers to its section by position instead of owning a copy of its
@@ -218,9 +246,16 @@ pub struct Chunk {
     pub source: Range<usize>,
     /// The wikitext at `source`, trimmed of surrounding whitespace.
     pub text: String,
-    /// Whether an edge of the chunk falls inside a line, because that line was
-    /// longer than the chunk bound.
-    pub cuts_line: bool,
+    /// What the chunk's edges damage, without repeats, in [`Loss`] order.
+    pub losses: Vec<Loss>,
+}
+
+impl Chunk {
+    /// Whether the chunk's edges cause `loss`.
+    #[must_use]
+    pub fn has_loss(&self, loss: Loss) -> bool {
+        self.losses.contains(&loss)
+    }
 }
 
 impl fmt::Debug for Chunk {
@@ -232,7 +267,7 @@ impl fmt::Debug for Chunk {
             .field("index", &self.index)
             .field("source", &self.source)
             .field("text_bytes", &self.text.len())
-            .field("cuts_line", &self.cuts_line)
+            .field("losses", &self.losses)
             .finish()
     }
 }
@@ -376,7 +411,7 @@ fn chunk_sections(text: &str, sections: &[Section], limits: &PrepareLimits) -> V
                         index,
                         text: text[source.clone()].to_owned(),
                         source,
-                        cuts_line: piece.cuts_line,
+                        losses: piece.losses,
                     }
                 })
         })
@@ -549,7 +584,7 @@ mod tests {
         let indexes: Vec<usize> = result.chunks.iter().map(|chunk| chunk.index).collect();
         assert_eq!(indexes, [0, 1, 2]);
         assert!(result.chunks.iter().all(|chunk| chunk.text.len() <= 30));
-        assert!(result.chunks.iter().all(|chunk| !chunk.cuts_line));
+        assert!(result.chunks.iter().all(|chunk| chunk.losses.is_empty()));
     }
 
     #[test]
