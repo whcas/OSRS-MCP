@@ -74,7 +74,7 @@ impl<R: BufRead> ExportReader<R> {
     }
 
     /// Reads to the next page element, then reads and validates it. `None`
-    /// means the root element closed.
+    /// means the whole document was read, including anything after the root.
     fn next_page(&mut self) -> Result<Option<Result<ImportedPage, PageIssue>>, ExportError> {
         loop {
             match self.tokens.next_token()? {
@@ -85,7 +85,23 @@ impl<R: BufRead> ExportReader<R> {
                 Token::Start(_) => self.tokens.skip_element()?,
                 Token::Text(text) if text.trim().is_empty() => {}
                 Token::Text(_) => return Err(self.tokens.structure_error()),
-                Token::End | Token::Eof => return Ok(None),
+                Token::End => return self.finish_document().map(|()| None),
+                Token::Eof => return Ok(None),
+            }
+        }
+    }
+
+    /// Reads what follows the root's closing tag to the end of the input, so
+    /// that a file is only complete if all of it is well-formed and within the
+    /// limits. Whitespace, comments and processing instructions are allowed.
+    fn finish_document(&mut self) -> Result<(), ExportError> {
+        loop {
+            match self.tokens.next_token()? {
+                Token::Eof => return Ok(()),
+                Token::Text(text) if text.trim().is_empty() => {}
+                Token::Start(_) | Token::Text(_) | Token::End => {
+                    return Err(self.tokens.structure_error());
+                }
             }
         }
     }
@@ -465,9 +481,79 @@ mod tests {
     }
 
     #[test]
-    fn content_after_the_closing_root_tag_is_ignored() {
-        let xml = format!("{}trailing", export_of(&[PageFixture::new(1, "One")]));
-        assert_eq!(import(&xml).pages().len(), 1);
+    fn whitespace_comments_and_processing_instructions_after_the_root_are_allowed() {
+        let xml = format!(
+            "{}\n<!-- done -->\n<?tool data?>\n  ",
+            export_of(&[PageFixture::new(1, "One")])
+        );
+        let imported = import(&xml);
+        assert_eq!(imported.pages().len(), 1);
+        assert_eq!(imported.summary.stream_error, None);
+    }
+
+    #[test]
+    fn nontrivial_content_after_the_root_is_a_structure_error_after_the_pages() {
+        let page = PageFixture::new(1, "One");
+        for trailing in ["trailing text", "<second-root/>", "<mediawiki/>"] {
+            let xml = format!("{}{trailing}", export_of(std::slice::from_ref(&page)));
+            let imported = import(&xml);
+            assert_eq!(imported.pages().len(), 1, "{trailing}");
+            assert!(
+                matches!(
+                    stream_error(&imported),
+                    ExportError::Malformed {
+                        fault: XmlFault::Structure,
+                        ..
+                    }
+                ),
+                "{trailing}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_markup_after_the_root_is_reported() {
+        let xml = format!("{}</stray>", export_of(&[PageFixture::new(1, "One")]));
+        let imported = import(&xml);
+        assert!(matches!(
+            stream_error(&imported),
+            ExportError::Malformed {
+                fault: XmlFault::TagMismatch,
+                ..
+            }
+        ));
+        let truncated = format!(
+            "{}<!-- never closed",
+            export_of(&[PageFixture::new(1, "One")])
+        );
+        assert!(matches!(
+            stream_error(&import(&truncated)),
+            ExportError::Truncated { .. }
+        ));
+    }
+
+    #[test]
+    fn oversized_data_after_the_root_hits_the_input_limit() {
+        let xml = export_of(&[PageFixture::new(1, "One")]);
+        let length = xml.len() as u64;
+        let padded = format!("{xml}{}", " ".repeat(100));
+        let imported =
+            import_bytes(padded.as_bytes(), limits(length + 50, 1 << 20, 1 << 20, 32)).unwrap();
+        assert_eq!(imported.pages().len(), 1);
+        assert_eq!(
+            stream_error(&imported),
+            &ExportError::LimitExceeded {
+                limit: LimitKind::Input,
+                max: length + 50
+            }
+        );
+    }
+
+    #[test]
+    fn a_complete_import_is_only_reported_after_the_end_of_input() {
+        let xml = format!("{}junk", export_of(&[PageFixture::new(1, "One")]));
+        let imported = import(&xml);
+        assert!(imported.summary.stream_error.is_some());
     }
 
     // --- Pages that are skipped ---
@@ -1242,6 +1328,24 @@ mod tests {
         if let Some(error) = error {
             assert!(!error.to_string().contains(marker), "display leaks input");
             assert!(!format!("{error:?}").contains(marker), "debug leaks input");
+        }
+    }
+
+    #[test]
+    fn debug_output_of_the_reader_and_its_pages_contains_none_of_the_input() {
+        let marker = "SECRETMARKER";
+        let siteinfo = format!(
+            "<siteinfo><sitename>{marker}</sitename><dbname>{marker}</dbname>\
+             <base>https://{marker}.example/</base></siteinfo>"
+        );
+        let mut redirect = PageFixture::new(1, marker).with_text(marker);
+        redirect.redirect = Some(marker.to_owned());
+        redirect.hash = Some("secretmarker".to_owned());
+        let xml = wrap(&siteinfo, &redirect.xml());
+        let mut reader = ExportReader::open(xml.as_bytes(), ImportLimits::default()).unwrap();
+        let page = reader.next().unwrap().unwrap();
+        for debug in [format!("{reader:?}"), format!("{page:?}")] {
+            assert!(!debug.to_lowercase().contains("secretmarker"), "{debug}");
         }
     }
 

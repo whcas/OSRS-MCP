@@ -8,6 +8,8 @@
 use std::fmt;
 use std::num::NonZeroU64;
 
+use reqwest::Url;
+
 use super::timestamp::RevisionTimestamp;
 
 /// Longest accepted page title, site name or database name, in bytes. `MediaWiki`
@@ -59,7 +61,7 @@ positive_id! {
 /// Non-empty, at most 1024 bytes and free of control characters. Underscores,
 /// capitalisation and any `#fragment` are kept exactly as exported; this type
 /// does not canonicalise.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PageTitle(String);
 
 impl PageTitle {
@@ -77,13 +79,21 @@ impl PageTitle {
     }
 }
 
+impl fmt::Debug for PageTitle {
+    /// Shows the length only: a title is export text, and `Debug` output ends
+    /// up in logs and failed-assertion messages.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "PageTitle({} bytes)", self.0.len())
+    }
+}
+
 /// The hash the export reported for a revision's text.
 ///
 /// `MediaWiki` writes a SHA-1 as lower-case base 36 (older versions used hex).
 /// This type keeps it as an opaque identifier and checks only its shape: one
 /// to 64 lower-case ASCII letters or digits. It is **not** recomputed from the
 /// text, so a match with the text is not guaranteed.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ExportedHash(String);
 
 impl ExportedHash {
@@ -102,6 +112,13 @@ impl ExportedHash {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Debug for ExportedHash {
+    /// Shows the length only, like [`PageTitle`].
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "ExportedHash({} chars)", self.0.len())
     }
 }
 
@@ -128,9 +145,10 @@ impl fmt::Display for SourceField {
 
 /// Which wiki an export came from, as its `siteinfo` header states.
 ///
-/// This is provenance for attribution and source links, not a trust decision:
-/// anyone can write any site name into a file.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// This is **unverified** provenance, kept as the file wrote it: anyone can
+/// write any site name or URL into a file, so it is for attribution and source
+/// links, not a trust decision. Its `Debug` output shows lengths only.
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SourceId {
     site_name: String,
     db_name: Option<String>,
@@ -140,9 +158,10 @@ pub struct SourceId {
 impl SourceId {
     /// Builds a site identity.
     ///
-    /// The base URL must start with `http://` or `https://` and contain no
-    /// whitespace or control characters. Names must be non-blank, at most 1024
-    /// bytes and free of control characters.
+    /// The base URL must parse as an `http` or `https` URL with a host and no
+    /// user name or password, at most 2048 bytes and with no whitespace or
+    /// control characters. It is kept exactly as given, not normalised. Names
+    /// must be non-blank, at most 1024 bytes and free of control characters.
     ///
     /// # Errors
     ///
@@ -188,15 +207,37 @@ impl SourceId {
     }
 }
 
+impl fmt::Debug for SourceId {
+    /// Shows lengths only: the header strings are untrusted export text.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SourceId")
+            .field("site_name_bytes", &self.site_name.len())
+            .field("db_name_bytes", &self.db_name.as_ref().map(String::len))
+            .field("base_url_bytes", &self.base_url.len())
+            .finish()
+    }
+}
+
 fn is_plain_name(text: &str) -> bool {
     !text.trim().is_empty() && text.len() <= MAX_NAME_BYTES && !text.chars().any(char::is_control)
 }
 
+/// Whether `text` is a plain `http(s)` URL with a host and no credentials.
+///
+/// The URL is checked, not rewritten: the parser silently drops some control
+/// characters, so those are refused first, and the original text is what is
+/// kept.
 fn is_web_url(text: &str) -> bool {
-    let has_web_scheme = text.starts_with("https://") || text.starts_with("http://");
-    has_web_scheme
-        && text.len() <= MAX_URL_BYTES
-        && !text.chars().any(|c| c.is_control() || c.is_whitespace())
+    if text.len() > MAX_URL_BYTES || text.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return false;
+    }
+    Url::parse(text).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some_and(|host| !host.is_empty())
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
 }
 
 /// The current revision of one page, as exported.
@@ -228,8 +269,8 @@ pub struct ImportedPage {
 }
 
 impl fmt::Debug for ImportedPage {
-    /// Omits the wikitext, so that logging a page or failing an assertion does
-    /// not print article text.
+    /// Omits the wikitext, and shows titles and hashes by length only, so that
+    /// logging a page or failing an assertion does not print export text.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ImportedPage")
@@ -327,6 +368,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn source_urls_need_a_host_and_no_credentials() {
+        for url in [
+            "https://",
+            "http://",
+            "https://user@wiki.example/",
+            "https://user:secret@wiki.example/",
+            "https://:secret@wiki.example/",
+            "mailto:someone@wiki.example",
+            "file:///etc/passwd",
+            "wiki.example/w/Main",
+            "https://wiki.example/\nx",
+        ] {
+            assert_eq!(source("W", None, url), Err(SourceField::BaseUrl), "{url}");
+        }
+        for url in [
+            "https://wiki.example",
+            "http://wiki.example:8080/w/Main_Page?x=1#y",
+        ] {
+            assert!(source("W", None, url).is_ok(), "{url}");
+        }
+    }
+
+    #[test]
+    fn the_base_url_is_kept_exactly_as_written() {
+        let source = source("W", None, "HTTPS://Wiki.Example/w/%7Emain").unwrap();
+        assert_eq!(source.base_url(), "HTTPS://Wiki.Example/w/%7Emain");
+    }
+
+    #[test]
+    fn debug_output_of_header_titles_and_hashes_shows_lengths_only() {
+        let marker = "SECRETMARKER";
+        let source = source(marker, Some(marker), &format!("https://{marker}.example/")).unwrap();
+        let title = PageTitle::new(marker.to_owned()).unwrap();
+        let hash = ExportedHash::new("secretmarker".to_owned()).unwrap();
+        for debug in [
+            format!("{source:?}"),
+            format!("{title:?}"),
+            format!("{hash:?}"),
+        ] {
+            assert!(!debug.to_lowercase().contains("secretmarker"), "{debug}");
+        }
+        assert_eq!(format!("{title:?}"), "PageTitle(12 bytes)");
     }
 
     #[test]
