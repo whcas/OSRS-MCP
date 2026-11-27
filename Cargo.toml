@@ -31,7 +31,8 @@ tokio = { version = "1", features = ["rt"] }
 [dev-dependencies]
 # Client side of the SDK, used only to drive the server from tests.
 rmcp = { version = "3.11", default-features = false, features = ["client", "server", "macros"] }
-# Throwaway directories for the Git hook tests; no optional features needed.
+# Throwaway directories for the Git hook and local export reader tests; no
+# optional features needed.
 tempfile = { version = "3", default-features = false }
 # `net` is for the loopback HTTP server in the market client's unit tests.
 tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }

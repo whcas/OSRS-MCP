@@ -24,6 +24,7 @@ Wiring this variable into the running server and the `character_summary` tool is
 - Only the fixed file name `character.json`. Callers cannot pass a path, and no other file in the directory is opened.
 - At most 256 KiB (`MAX_CHARACTER_EXPORT_BYTES`; a real file is a few kilobytes). Larger files are rejected without being parsed.
 - Only a regular file: a directory, or a named pipe, named `character.json` is refused. Symbolic links are followed, because the directory is your own.
+- **Trusted directory assumption.** The file type is checked just before the file is opened. That guards against a mistaken file, not against someone who can modify the directory concurrently (for example replacing the file with a named pipe between the check and the open). The directory is the plugin's own, user-owned folder and is assumed not to be modified adversarially. Hardened handling would need platform-specific code and is not provided.
 - Every call reads the file again. There is no cache, file watcher, polling or background work.
 - Parsing is `parse_character_export`; warnings and `exported_at` are preserved. `exported_at` is the time of the last change to the exported data, not the time of the read or a sign that the player is online.
 

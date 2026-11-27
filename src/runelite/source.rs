@@ -67,8 +67,7 @@ impl LocalExportSource {
 
     /// Builds the source from the value of [`EXPORT_DIR_VAR`]. An unset or
     /// empty value means not configured.
-    #[must_use]
-    pub fn from_env_value(value: Option<OsString>) -> Self {
+    fn from_env_value(value: Option<OsString>) -> Self {
         match value {
             Some(path) if !path.is_empty() => Self::new(PathBuf::from(path)),
             _ => Self::unconfigured(),
@@ -79,12 +78,6 @@ impl LocalExportSource {
     #[must_use]
     pub fn from_env() -> Self {
         Self::from_env_value(std::env::var_os(EXPORT_DIR_VAR))
-    }
-
-    /// Whether a directory has been configured.
-    #[must_use]
-    pub const fn is_configured(&self) -> bool {
-        self.directory.is_some()
     }
 
     /// Reads and parses `character.json` from the configured directory.
@@ -160,8 +153,10 @@ impl ExportReadError {
 /// [`MAX_CHARACTER_EXPORT_BYTES`] bytes.
 fn read_bounded(path: &Path, directory: &Path) -> Result<Vec<u8>, ExportReadError> {
     // Checked before opening: opening a named pipe would block until a writer
-    // appears. `metadata` follows symlinks, as the configured directory is
-    // the user's own.
+    // appears. `metadata` follows symlinks. This is a guard against a
+    // mistaken file, not a defence against someone replacing the file between
+    // this check and the open: the directory is the user's own and is trusted
+    // not to be modified adversarially.
     let metadata = fs::metadata(path).map_err(|error| classify_missing(&error, directory))?;
     if !metadata.is_file() {
         return Err(ExportReadError::NotARegularFile);
@@ -207,56 +202,41 @@ fn classify_io(error: &io::Error) -> ExportReadError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use tempfile::TempDir;
 
     use super::*;
 
     const SYNTHETIC_EXPORT: &[u8] =
         include_bytes!("../../tests/fixtures/runelite_export/character.synthetic.json");
 
-    /// A fresh directory under the system temp directory, removed on drop.
-    struct TestDir(PathBuf);
-
-    impl TestDir {
-        fn new() -> Self {
-            static NEXT: AtomicU32 = AtomicU32::new(0);
-            let path = std::env::temp_dir().join(format!(
-                "osrs-mcp-source-test-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir_all(&path).unwrap();
-            Self(path)
-        }
-
-        fn write_character(&self, content: &[u8]) {
-            fs::write(self.0.join(CHARACTER_FILE_NAME), content).unwrap();
-        }
-
-        fn source(&self) -> LocalExportSource {
-            LocalExportSource::new(self.0.clone())
-        }
+    fn new_dir() -> TempDir {
+        TempDir::with_prefix("osrs-mcp-source-").unwrap()
     }
 
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
+    fn write_character(dir: &TempDir, content: &[u8]) {
+        fs::write(dir.path().join(CHARACTER_FILE_NAME), content).unwrap();
+    }
+
+    fn source_for(dir: &TempDir) -> LocalExportSource {
+        LocalExportSource::new(dir.path().to_path_buf())
     }
 
     #[test]
     fn an_unset_or_empty_variable_means_not_configured() {
         for value in [None, Some(OsString::new())] {
             let source = LocalExportSource::from_env_value(value);
-            assert!(!source.is_configured());
             assert_eq!(source.read_character(), Err(ExportReadError::NotConfigured));
         }
     }
 
     #[test]
-    fn a_non_empty_variable_configures_the_source() {
-        let source = LocalExportSource::from_env_value(Some(OsString::from("some-dir")));
-        assert!(source.is_configured());
+    fn a_non_empty_variable_names_the_directory_to_read() {
+        let dir = new_dir();
+        write_character(&dir, SYNTHETIC_EXPORT);
+
+        let source = LocalExportSource::from_env_value(Some(dir.path().as_os_str().to_owned()));
+
+        assert!(source.read_character().is_ok());
     }
 
     #[test]
@@ -269,10 +249,10 @@ mod tests {
 
     #[test]
     fn a_valid_export_is_read_and_parsed() {
-        let dir = TestDir::new();
-        dir.write_character(SYNTHETIC_EXPORT);
+        let dir = new_dir();
+        write_character(&dir, SYNTHETIC_EXPORT);
 
-        let export = dir.source().read_character().unwrap();
+        let export = source_for(&dir).read_character().unwrap();
 
         assert_eq!(export, parse_character_export(SYNTHETIC_EXPORT).unwrap());
     }
@@ -280,20 +260,20 @@ mod tests {
     #[test]
     fn parser_warnings_are_preserved() {
         // Level 5 with 0 experience disagrees with the experience table.
-        let dir = TestDir::new();
-        dir.write_character(
+        let dir = new_dir();
+        write_character(&dir,
             br#"{"exported_at":"2026-01-01T12:00:00Z","stats":{"Attack":{"real_level":5,"experience":0}}}"#,
         );
 
-        let export = dir.source().read_character().unwrap();
+        let export = source_for(&dir).read_character().unwrap();
 
         assert_eq!(export.warnings().len(), 1);
     }
 
     #[test]
     fn a_missing_directory_is_reported_as_such() {
-        let dir = TestDir::new();
-        let source = LocalExportSource::new(dir.0.join("does-not-exist"));
+        let dir = new_dir();
+        let source = LocalExportSource::new(dir.path().join("does-not-exist"));
 
         assert_eq!(
             source.read_character(),
@@ -303,9 +283,9 @@ mod tests {
 
     #[test]
     fn a_configured_path_that_is_a_file_is_an_unavailable_directory() {
-        let dir = TestDir::new();
-        dir.write_character(SYNTHETIC_EXPORT);
-        let source = LocalExportSource::new(dir.0.join(CHARACTER_FILE_NAME));
+        let dir = new_dir();
+        write_character(&dir, SYNTHETIC_EXPORT);
+        let source = LocalExportSource::new(dir.path().join(CHARACTER_FILE_NAME));
 
         assert_eq!(
             source.read_character(),
@@ -315,44 +295,44 @@ mod tests {
 
     #[test]
     fn a_directory_without_the_file_is_reported_as_such() {
-        let dir = TestDir::new();
+        let dir = new_dir();
 
         assert_eq!(
-            dir.source().read_character(),
+            source_for(&dir).read_character(),
             Err(ExportReadError::FileNotFound)
         );
     }
 
     #[test]
     fn other_files_in_the_directory_are_never_read() {
-        let dir = TestDir::new();
-        fs::write(dir.0.join("bank.json"), SYNTHETIC_EXPORT).unwrap();
+        let dir = new_dir();
+        fs::write(dir.path().join("bank.json"), SYNTHETIC_EXPORT).unwrap();
 
         assert_eq!(
-            dir.source().read_character(),
+            source_for(&dir).read_character(),
             Err(ExportReadError::FileNotFound)
         );
     }
 
     #[test]
     fn a_directory_named_like_the_file_is_not_read() {
-        let dir = TestDir::new();
-        fs::create_dir(dir.0.join(CHARACTER_FILE_NAME)).unwrap();
+        let dir = new_dir();
+        fs::create_dir(dir.path().join(CHARACTER_FILE_NAME)).unwrap();
 
         assert_eq!(
-            dir.source().read_character(),
+            source_for(&dir).read_character(),
             Err(ExportReadError::NotARegularFile)
         );
     }
 
     #[test]
     fn a_file_over_the_limit_is_rejected_without_being_parsed() {
-        let dir = TestDir::new();
+        let dir = new_dir();
         let oversized = vec![b' '; usize::try_from(MAX_CHARACTER_EXPORT_BYTES).unwrap() + 1];
-        dir.write_character(&oversized);
+        write_character(&dir, &oversized);
 
         assert_eq!(
-            dir.source().read_character(),
+            source_for(&dir).read_character(),
             Err(ExportReadError::TooLarge {
                 limit: MAX_CHARACTER_EXPORT_BYTES
             })
@@ -363,20 +343,20 @@ mod tests {
     fn a_file_exactly_at_the_limit_is_read() {
         // Whitespace padding is valid JSON, so the only thing under test is
         // that the limit itself is not treated as too large.
-        let dir = TestDir::new();
+        let dir = new_dir();
         let mut content = SYNTHETIC_EXPORT.to_vec();
         content.resize(usize::try_from(MAX_CHARACTER_EXPORT_BYTES).unwrap(), b' ');
-        dir.write_character(&content);
+        write_character(&dir, &content);
 
-        assert!(dir.source().read_character().is_ok());
+        assert!(source_for(&dir).read_character().is_ok());
     }
 
     #[test]
     fn a_truncated_file_is_a_transient_parse_error() {
-        let dir = TestDir::new();
-        dir.write_character(&SYNTHETIC_EXPORT[..SYNTHETIC_EXPORT.len() / 2]);
+        let dir = new_dir();
+        write_character(&dir, &SYNTHETIC_EXPORT[..SYNTHETIC_EXPORT.len() / 2]);
 
-        let error = dir.source().read_character().unwrap_err();
+        let error = source_for(&dir).read_character().unwrap_err();
 
         assert_eq!(
             error,
@@ -387,20 +367,20 @@ mod tests {
 
     #[test]
     fn an_empty_file_is_a_transient_parse_error() {
-        let dir = TestDir::new();
-        dir.write_character(b"");
+        let dir = new_dir();
+        write_character(&dir, b"");
 
-        let error = dir.source().read_character().unwrap_err();
+        let error = source_for(&dir).read_character().unwrap_err();
 
         assert!(error.is_transient());
     }
 
     #[test]
     fn invalid_json_is_a_parse_error_that_is_not_transient() {
-        let dir = TestDir::new();
-        dir.write_character(b"this is not json");
+        let dir = new_dir();
+        write_character(&dir, b"this is not json");
 
-        let error = dir.source().read_character().unwrap_err();
+        let error = source_for(&dir).read_character().unwrap_err();
 
         assert_eq!(
             error,
@@ -439,9 +419,14 @@ mod tests {
 
     #[test]
     fn error_messages_do_not_contain_the_configured_path() {
-        let dir = TestDir::new();
-        let source = LocalExportSource::new(dir.0.join("missing-private-name"));
-        let directory_name = dir.0.file_name().unwrap().to_string_lossy().into_owned();
+        let dir = new_dir();
+        let source = LocalExportSource::new(dir.path().join("missing-private-name"));
+        let directory_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
 
         let message = source.read_character().unwrap_err().to_string();
 
