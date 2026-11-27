@@ -10,6 +10,7 @@
 //! bounded reader that supplies those bytes from a configured directory.
 
 mod character;
+mod diary;
 mod experience;
 mod skill;
 mod source;
@@ -18,6 +19,10 @@ mod timestamp;
 pub use character::{
     CharacterExport, CharacterParseError, SkillRecord, SkillValueProblem, Warning,
     parse_character_export,
+};
+pub use diary::{
+    DiaryArea, DiaryParseError, DiaryProgress, DiaryTask, DiaryTier, DiaryTierProgress,
+    DiaryWarning, MAX_DIARY_EXPORT_BYTES, parse_diary_export,
 };
 pub use experience::{MAX_EXPERIENCE, MAX_LEVEL, level_for_experience};
 pub use skill::Skill;
