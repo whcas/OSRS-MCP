@@ -7,6 +7,7 @@ pub mod domain;
 pub mod market;
 pub mod mcp;
 pub mod profit;
+pub mod runelite;
 
 /// Static build metadata for this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
