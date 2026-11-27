@@ -146,6 +146,10 @@ Bypass a hook once with `git commit --no-verify` or `git push --no-verify`. The 
 
 The maintainer configures required checks in the branch ruleset; contributors and agents do not change repository protections.
 
+## Retrieval evaluation
+
+[`eval/wiki-retrieval/`](eval/wiki-retrieval/README.md) holds a small benchmark dataset, metrics and procedure for comparing future Wiki retrieval. Its structure is checked by `scripts/check.sh`; it contains no Wiki text and no results yet.
+
 ## Licensing and data
 
 Application licensing is not yet established. Third-party game data and Wiki content have separate terms; investigate and document those before acquiring or redistributing substantial datasets. This is an unofficial project, not affiliated with Jagex or the OSRS Wiki.
