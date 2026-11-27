@@ -10,7 +10,8 @@ No retrieval engine, index or Wiki download exists yet, so this directory holds 
 | --- | --- |
 | `dataset.v1.json` | Queries, relevance judgements and the page records they refer to |
 | `README.md` | This document: format, metrics, procedure, limitations |
-| `../../tests/eval_dataset.rs` | Offline structural checks, run by `scripts/check.sh` |
+| `../../src/eval.rs` | Dataset types and format validation |
+| `../../tests/eval_dataset.rs` | Offline checks for the committed benchmark, run by `scripts/check.sh` |
 
 Dataset content is original: query wording is written for this project, and the references are page titles, section heading names and revision identifiers. No Wiki prose is copied, which keeps the file clear of share-alike questions (see [issue #6](https://github.com/whcas/OSRS-MCP/issues/6) on Wiki acquisition and licensing). No personal data or account exports are included.
 
@@ -227,7 +228,8 @@ Because the Wiki changes with game updates, a judged section may be renamed or r
 
 ## How future implementations use the dataset
 
-- A scorer reads `dataset.v1.json` and a run file and prints the metrics above. When it exists, it should reuse the types currently defined in `tests/eval_dataset.rs` and move them into the library.
+- `osrs_mcp::eval::Dataset::parse` validates the dataset. `osrs_mcp::eval::scorer::score_query` scores ranked hits for one query from explicit corpus observations and a rank cutoff. It reports judgement availability, revision mismatches, separate page and section recall, hit rate and reciprocal rank for both denominators, and section nDCG where it applies.
+- The planned offline runner will read the dataset and corpus, provide the scorer's inputs, and combine results by category, mode and review tier. It will also report title resolution, missing material, response size and latency.
 - The first keyword engine is run against the dataset to set a baseline. Semantic retrieval or other additions are justified only if they improve the metrics that matter at acceptable cost, as the README principle says.
 - Tests that depend on the Wiki must use synthetic fixtures and not this dataset's references, so unit tests stay offline and independent of the live site.
 

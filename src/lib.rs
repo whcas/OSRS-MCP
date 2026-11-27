@@ -4,6 +4,7 @@
 //! `src/main.rs` is a thin adapter over this crate.
 
 pub mod domain;
+pub mod eval;
 pub mod market;
 pub mod mcp;
 pub mod profit;

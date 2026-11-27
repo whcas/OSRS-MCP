@@ -18,6 +18,9 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # Official Rust MCP SDK. Default features are disabled so that only the server
 # side, the tool macros and the stdio transport are compiled; see ADR-0001.
 rmcp = { version = "3.11", default-features = false, features = ["server", "macros", "transport-io"] }
+# Local Wiki corpus store (ADR-0004). `bundled` compiles SQLite, with FTS5, into
+# the binary so the database does not depend on the system library.
+rusqlite = { version = "0.43", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 # `raw_value` only adds the `RawValue` type: the market client reads average
 # prices from their exact text, and the RuneLite parser reads `stats` in file
@@ -32,8 +35,8 @@ tokio = { version = "1", features = ["rt"] }
 [dev-dependencies]
 # Client side of the SDK, used only to drive the server from tests.
 rmcp = { version = "3.11", default-features = false, features = ["client", "server", "macros"] }
-# Throwaway directories for the Git hook and local export reader tests; no
-# optional features needed.
+# Throwaway directories for the Git hook, local export reader and Wiki store
+# tests; no optional features needed.
 tempfile = { version = "3", default-features = false }
 # `net` is for the loopback HTTP server in the market client's unit tests.
 tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }
