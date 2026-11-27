@@ -9,6 +9,8 @@
 //! `+` in `new`, which keeps unrelated tool changes from conflicting.
 
 mod character;
+mod containers;
+mod export_output;
 mod info;
 mod market;
 mod market_data;
@@ -33,10 +35,18 @@ use crate::market::{ClientConfig, ConfigError, HardcoreClient};
 use crate::runelite::LocalExportSource;
 use market_data::MarketData;
 
-pub use character::{
-    CharacterSummary, CharacterSummaryFailure, ExportedAtOutput, FailureStatus, SkillOutput,
-    SummaryStatus, UnreadableReason, WarningOutput,
+pub use character::{CharacterSummary, SkillOutput, SummaryStatus, WarningOutput};
+pub use containers::{
+    ContainerContents, ContainerOutput, ContainerRowOutput, ContainerWarningOutput, ContentsStatus,
+    ItemFilterOutput,
 };
+pub use export_output::{
+    ExportFailure, ExportedAtOutput, FailureStatus, ObservationTime, UnreadableReason,
+};
+
+/// A failed `character_summary` call; the failure shape is shared by all
+/// account tools.
+pub type CharacterSummaryFailure = ExportFailure;
 pub use info::ServerInfoOutput;
 
 /// Instructions shown to clients that surface server guidance.
@@ -74,6 +84,7 @@ impl OsrsMcpServer {
         Self {
             tool_router: Self::info_router()
                 + Self::character_router()
+                + Self::containers_router()
                 + Self::market_router()
                 + Self::prices_router(),
             market,
