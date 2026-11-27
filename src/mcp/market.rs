@@ -8,10 +8,11 @@ use rmcp::{Json, handler::server::wrapper::Parameters, schemars::JsonSchema, too
 use serde::{Deserialize, Serialize};
 
 use super::OsrsMcpServer;
+use super::provenance::SourceOutput;
 use crate::domain::ItemId;
 use crate::market::{
     ItemInfo, ItemMatch, ItemQuery, MatchKind, Observed, Provenance, QueryError, ResultLimit,
-    SearchOutcome, WorldType, search,
+    SearchOutcome, search,
 };
 
 /// Shown with every lookup so a match is not read as proof of trading.
@@ -54,34 +55,6 @@ impl ItemSearchInput {
             }
         };
         Ok(ItemSearchRequest { query, limit })
-    }
-}
-
-/// Where and when the data came from.
-#[derive(Debug, Serialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-struct SourceOutput {
-    /// Always `hardcore`: results never come from standard-world data.
-    world_type: &'static str,
-    /// The upstream endpoint that supplied the data.
-    endpoint: &'static str,
-    /// The exact URL requested.
-    source_url: String,
-    /// When this server finished retrieving the response, in whole seconds since
-    /// the Unix epoch (UTC). It is not the time of any trade.
-    retrieved_at_unix_seconds: u64,
-}
-
-impl From<&Provenance> for SourceOutput {
-    fn from(provenance: &Provenance) -> Self {
-        Self {
-            world_type: match provenance.world_type {
-                WorldType::Hardcore => "hardcore",
-            },
-            endpoint: provenance.endpoint.path(),
-            source_url: provenance.source_url.clone(),
-            retrieved_at_unix_seconds: provenance.retrieved_at.0,
-        }
     }
 }
 
@@ -249,23 +222,14 @@ impl OsrsMcpServer {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use rmcp::{
-        ServiceExt,
-        model::{CallToolRequestParams, CallToolResult},
-        service::{RoleClient, RunningService},
-    };
     use serde_json::{Value, json};
 
-    use super::super::market_data::{MarketData, MarketFuture};
+    use super::super::test_support::{FakeMarket, call_tool, connect, error_text, provenance};
     use super::*;
-    use crate::domain::UnixSeconds;
     use crate::market::{Endpoint, MarketDataError};
 
-    const SOURCE_URL: &str = "https://example.invalid/mapping";
     const RETRIEVED_AT: u64 = 1_700_000_000;
+    const SOURCE_URL: &str = "https://example.invalid/mapping";
 
     fn item(id: u32, name: &str) -> ItemInfo {
         ItemInfo {
@@ -282,12 +246,7 @@ mod tests {
     fn observed(items: Vec<ItemInfo>) -> Observed<Vec<ItemInfo>> {
         Observed {
             value: items,
-            provenance: Provenance {
-                world_type: WorldType::Hardcore,
-                endpoint: Endpoint::Mapping,
-                source_url: SOURCE_URL.to_owned(),
-                retrieved_at: UnixSeconds(RETRIEVED_AT),
-            },
+            provenance: provenance(Endpoint::Mapping, RETRIEVED_AT),
         }
     }
 
@@ -305,66 +264,11 @@ mod tests {
         ])
     }
 
-    /// A market source that returns a canned mapping and counts requests.
-    #[derive(Debug)]
-    struct FakeMarket {
-        mapping: Result<Observed<Vec<ItemInfo>>, MarketDataError>,
-        requests: AtomicUsize,
-    }
-
-    impl FakeMarket {
-        fn new(mapping: Result<Observed<Vec<ItemInfo>>, MarketDataError>) -> Arc<Self> {
-            Arc::new(Self {
-                mapping,
-                requests: AtomicUsize::new(0),
-            })
-        }
-
-        fn requests(&self) -> usize {
-            self.requests.load(Ordering::SeqCst)
-        }
-    }
-
-    impl MarketData for FakeMarket {
-        fn mapping(&self) -> MarketFuture<'_, Vec<ItemInfo>> {
-            self.requests.fetch_add(1, Ordering::SeqCst);
-            let result = self.mapping.clone();
-            Box::pin(async move { result })
-        }
-    }
-
-    /// Connects a real SDK client to a server reading from `market`.
-    async fn connect(market: &Arc<FakeMarket>) -> RunningService<RoleClient, ()> {
-        let (client_io, server_io) = tokio::io::duplex(16 * 1024);
-        let server = OsrsMcpServer::with_market(market.clone());
-        tokio::spawn(async move {
-            if let Ok(running) = server.serve(server_io).await {
-                let _ = running.waiting().await;
-            }
-        });
-        ().serve(client_io).await.expect("client should initialise")
-    }
-
     async fn call_item_search(
-        client: &RunningService<RoleClient, ()>,
+        client: &rmcp::service::RunningService<rmcp::service::RoleClient, ()>,
         arguments: Value,
-    ) -> CallToolResult {
-        let arguments = arguments.as_object().expect("object arguments").clone();
-        client
-            .call_tool(CallToolRequestParams::new("item_search").with_arguments(arguments))
-            .await
-            .expect("tool call should complete")
-    }
-
-    fn error_text(result: &CallToolResult) -> String {
-        assert_eq!(result.is_error, Some(true), "result: {result:?}");
-        result
-            .content
-            .first()
-            .and_then(|block| block.as_text())
-            .expect("text content")
-            .text
-            .clone()
+    ) -> rmcp::model::CallToolResult {
+        call_tool(client, "item_search", arguments).await
     }
 
     #[test]
@@ -475,7 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_is_discoverable_read_only_and_describes_its_input_and_output() {
-        let market = FakeMarket::new(Ok(sample_mapping()));
+        let market = FakeMarket::with_mapping(Ok(sample_mapping()));
         let client = connect(&market).await;
 
         let tools = client.list_all_tools().await.expect("tools/list");
@@ -502,7 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn name_search_returns_typed_structured_content_after_one_request() {
-        let market = FakeMarket::new(Ok(sample_mapping()));
+        let market = FakeMarket::with_mapping(Ok(sample_mapping()));
         let client = connect(&market).await;
 
         let result = call_item_search(&client, json!({ "name": "CANNONBALL", "limit": 1 })).await;
@@ -518,7 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn old_generic_name_returns_candidates_for_renamed_and_split_items() {
-        let market = FakeMarket::new(Ok(observed(vec![
+        let market = FakeMarket::with_mapping(Ok(observed(vec![
             item(2, "Steel cannonball"),
             item(3, "Granite cannonball"),
         ])));
@@ -544,7 +448,8 @@ mod tests {
         let at_limit = format!("Sample {}", "é".repeat(124) + "x");
         let over_limit = format!("{at_limit}y");
         assert_eq!(at_limit.len(), 256);
-        let market = FakeMarket::new(Ok(observed(vec![item(2, &at_limit), item(3, &over_limit)])));
+        let market =
+            FakeMarket::with_mapping(Ok(observed(vec![item(2, &at_limit), item(3, &over_limit)])));
         let client = connect(&market).await;
 
         for arguments in [json!({"item_id": 2}), json!({"name": "sample", "limit": 1})] {
@@ -564,7 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_input_is_a_tool_error_and_makes_no_request() {
-        let market = FakeMarket::new(Ok(sample_mapping()));
+        let market = FakeMarket::with_mapping(Ok(sample_mapping()));
         let client = connect(&market).await;
 
         for arguments in [
@@ -586,7 +491,7 @@ mod tests {
             endpoint: Endpoint::Mapping,
             status: 429,
         };
-        let market = FakeMarket::new(Err(failure));
+        let market = FakeMarket::with_mapping(Err(failure));
         let client = connect(&market).await;
 
         let result = call_item_search(&client, json!({ "name": "cannonball" })).await;
@@ -600,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn unmatched_search_succeeds_with_an_empty_list() {
-        let market = FakeMarket::new(Ok(sample_mapping()));
+        let market = FakeMarket::with_mapping(Ok(sample_mapping()));
         let client = connect(&market).await;
 
         let result = call_item_search(&client, json!({ "name": "zzzz" })).await;
