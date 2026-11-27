@@ -693,7 +693,9 @@ mod tests {
 
     #[test]
     fn a_truncated_file_is_retryable_and_the_text_does_not_claim_a_write() {
-        let result = failure(&ExportReadError::Parse(CharacterParseError::Truncated));
+        let result = failure(&ExportReadError::Parse(
+            CharacterParseError::Truncated.into(),
+        ));
 
         assert_eq!(result.status, FailureStatus::InvalidExport);
         assert_eq!(result.retryable, Some(true));
@@ -703,7 +705,9 @@ mod tests {
 
     #[test]
     fn other_parse_failures_are_not_retryable() {
-        let result = failure(&ExportReadError::Parse(CharacterParseError::InvalidJson));
+        let result = failure(&ExportReadError::Parse(
+            CharacterParseError::InvalidJson.into(),
+        ));
 
         assert_eq!(result.retryable, Some(false));
         assert_eq!(result.detail.as_deref(), Some("export is not valid JSON"));
