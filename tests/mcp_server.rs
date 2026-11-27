@@ -15,6 +15,7 @@ async fn connect() -> (RunningService<RoleClient, ()>, JoinHandle<()>) {
     let (client_io, server_io) = tokio::io::duplex(8192);
     let server = tokio::spawn(async move {
         let running = OsrsMcpServer::new()
+            .expect("server should be configured")
             .serve(server_io)
             .await
             .expect("server should initialise");
@@ -48,7 +49,7 @@ async fn initialization_reports_server_identity_and_tools_capability() {
 }
 
 #[tokio::test]
-async fn tool_discovery_lists_only_read_only_tools_with_typed_outputs() {
+async fn tool_discovery_lists_only_described_read_only_tools_including_server_info() {
     let (client, _server) = connect().await;
 
     let tools = client.list_all_tools().await.expect("tools/list");
@@ -57,18 +58,31 @@ async fn tool_discovery_lists_only_read_only_tools_with_typed_outputs() {
     names.sort_unstable();
     assert_eq!(
         names,
-        ["character_summary", "server_info"],
+        [
+            "character_summary",
+            "item_prices",
+            "item_search",
+            "server_info"
+        ],
         "tools: {tools:?}"
     );
     for tool in &tools {
-        assert!(tool.description.is_some(), "tools need descriptions");
+        assert!(
+            tool.description.is_some(),
+            "{} needs a description",
+            tool.name
+        );
         let annotations = tool.annotations.as_ref().expect("annotations");
         assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
         assert_eq!(annotations.destructive_hint, Some(false), "{}", tool.name);
         assert_eq!(annotations.idempotent_hint, Some(true), "{}", tool.name);
-        assert_eq!(annotations.open_world_hint, Some(false), "{}", tool.name);
-        assert!(tool.output_schema.is_some(), "typed output schema");
+        assert!(tool.output_schema.is_some(), "{} typed output", tool.name);
     }
+    let server_info = tools.iter().find(|tool| tool.name == "server_info");
+    let open_world = server_info
+        .and_then(|tool| tool.annotations.as_ref())
+        .and_then(|annotations| annotations.open_world_hint);
+    assert_eq!(open_world, Some(false), "server_info uses no external data");
 }
 
 #[tokio::test]

@@ -10,6 +10,14 @@
 
 mod character;
 mod info;
+mod market;
+mod market_data;
+mod prices;
+mod provenance;
+#[cfg(test)]
+mod test_support;
+
+use std::sync::Arc;
 
 use rmcp::{
     ServerHandler, ServiceExt,
@@ -21,7 +29,9 @@ use rmcp::{
 };
 
 use crate::build_info;
+use crate::market::{ClientConfig, ConfigError, HardcoreClient};
 use crate::runelite::LocalExportSource;
+use market_data::MarketData;
 
 pub use character::{
     CharacterSummary, CharacterSummaryFailure, ExportedAtOutput, FailureStatus, SkillOutput,
@@ -32,28 +42,41 @@ pub use info::ServerInfoOutput;
 /// Instructions shown to clients that surface server guidance.
 const INSTRUCTIONS: &str = "Read-only advisory server for Old School RuneScape Hardcore \
 worlds. It never performs in-game actions. Call `server_info` to see the version and \
-capabilities.";
+capabilities. Market tools read Hardcore Grand Exchange data only and report where and \
+when it was retrieved; they never substitute standard-world data.";
 
 /// The OSRS MCP server.
 #[derive(Debug, Clone)]
 pub struct OsrsMcpServer {
     tool_router: ToolRouter<Self>,
+    market: Arc<dyn MarketData>,
     export_source: LocalExportSource,
 }
 
-impl Default for OsrsMcpServer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl OsrsMcpServer {
-    /// Creates a server with all tools registered and no `RuneLite` export
-    /// directory configured; see [`with_export_source`](Self::with_export_source).
-    #[must_use]
-    pub fn new() -> Self {
+    /// Creates a server with all tools registered, reading Hardcore market data
+    /// from the live prices API and with no `RuneLite` export directory
+    /// configured; see [`with_export_source`](Self::with_export_source).
+    /// Construction performs no network request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] if the market client cannot be built.
+    pub fn new() -> Result<Self, ConfigError> {
+        let client = HardcoreClient::new(ClientConfig::default())?;
+        Ok(Self::with_market(Arc::new(client)))
+    }
+
+    /// Creates a server that reads market data from `market`. The production
+    /// path is [`new`](Self::new); this exists so the market source can be
+    /// injected at the service boundary.
+    fn with_market(market: Arc<dyn MarketData>) -> Self {
         Self {
-            tool_router: Self::info_router() + Self::character_router(),
+            tool_router: Self::info_router()
+                + Self::character_router()
+                + Self::market_router()
+                + Self::prices_router(),
+            market,
             export_source: LocalExportSource::unconfigured(),
         }
     }
@@ -97,11 +120,13 @@ impl ServerHandler for OsrsMcpServer {
 ///
 /// # Errors
 ///
-/// Returns an error if the MCP handshake fails or the connection ends abnormally.
+/// Returns an error if the server cannot be configured, the MCP handshake fails or
+/// the connection ends abnormally.
 pub async fn serve_stdio() -> Result<(), ServeError> {
-    let transport = rmcp::transport::stdio();
-    let server = OsrsMcpServer::new().with_export_source(LocalExportSource::from_env());
-    serve(server, transport).await
+    let server = OsrsMcpServer::new()
+        .map_err(|error| ServeError::Configuration(Box::new(error)))?
+        .with_export_source(LocalExportSource::from_env());
+    serve(server, rmcp::transport::stdio()).await
 }
 
 /// A boxed underlying error, kept so callers can walk the source chain.
@@ -111,6 +136,8 @@ type Cause = Box<dyn std::error::Error + Send + Sync>;
 /// through [`std::error::Error::source`].
 #[derive(Debug)]
 pub enum ServeError {
+    /// The server could not be configured, so it never started.
+    Configuration(Cause),
     /// The MCP initialization handshake failed.
     Initialize(Cause),
     /// The connection ended abnormally after initialization.
@@ -120,6 +147,7 @@ pub enum ServeError {
 impl std::fmt::Display for ServeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::Configuration(_) => "MCP server could not be configured",
             Self::Initialize(_) => "MCP initialization failed",
             Self::Connection(_) => "MCP connection failed",
         })
@@ -129,7 +157,9 @@ impl std::fmt::Display for ServeError {
 impl std::error::Error for ServeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Initialize(cause) | Self::Connection(cause) => Some(cause.as_ref()),
+            Self::Configuration(cause) | Self::Initialize(cause) | Self::Connection(cause) => {
+                Some(cause.as_ref())
+            }
         }
     }
 }

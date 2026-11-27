@@ -21,6 +21,7 @@ async fn connect(source: LocalExportSource) -> (RunningService<RoleClient, ()>, 
     let (client_io, server_io) = tokio::io::duplex(65536);
     let server = tokio::spawn(async move {
         let running = OsrsMcpServer::new()
+            .expect("server should be configured")
             .with_export_source(source)
             .serve(server_io)
             .await
