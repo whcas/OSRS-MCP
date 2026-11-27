@@ -1,0 +1,11 @@
+{
+  "exported_at": "2026-01-02T08:20:30.123456789+01:00",
+  "plugin_version": "0.6.0-synthetic",
+  "summary": {"tiers_complete": 0, "tiers_possible": 2},
+  "diaries": {
+    "Example Region": {
+      "easy": {"complete": true, "tasks_done": 1, "tasks": [{"name":"Example task","complete":false}]},
+      "medium": {"complete": false, "tasks_done": 0}
+    }
+  }
+}
