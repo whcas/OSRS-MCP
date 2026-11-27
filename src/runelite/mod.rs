@@ -1,8 +1,8 @@
 //! Import of `RuneLite` account exports.
 //!
-//! Currently supports `character.json` from the Character State Exporter
-//! plugin ([`parse_character_export`]). The format and the decisions behind
-//! this module are recorded in `docs/research/runelite-export-formats.md`.
+//! Supports `character.json` ([`parse_character_export`]) and `quests.json`
+//! ([`parse_quest_export`]) from the Character State Exporter plugin. The
+//! formats are recorded in `docs/research/`.
 //!
 //! The parser reads bytes it is given. It performs no file or network I/O and
 //! has no knowledge of where exports live, so it works on synthetic fixtures
@@ -11,6 +11,7 @@
 
 mod character;
 mod experience;
+mod quest;
 mod skill;
 mod source;
 mod timestamp;
@@ -20,6 +21,10 @@ pub use character::{
     parse_character_export,
 };
 pub use experience::{MAX_EXPERIENCE, MAX_LEVEL, level_for_experience};
+pub use quest::{
+    MAX_QUEST_EXPORT_BYTES, MAX_QUEST_ROWS, QuestParseError, QuestProgress, QuestRecord,
+    QuestState, QuestWarning, RuneLiteQuestId, parse_quest_export,
+};
 pub use skill::Skill;
 pub use source::{
     CHARACTER_FILE_NAME, EXPORT_DIR_VAR, ExportReadError, LocalExportSource,
