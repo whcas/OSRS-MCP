@@ -40,9 +40,11 @@ name, then name, then item id, so the order does not depend on the source order.
 
 ### Example
 
-Request: `{"name": "cannonball", "limit": 3}`. A response lists `Cannonball`
-first as an `exact_name` match, with `ambiguous: false` because it is the only
-exact match, followed by prefix and substring matches such as `Cannonball mould`.
+Request `{"name": "steel cannonball", "limit": 3}`. In an illustrative mapping
+that contains a single `Steel cannonball` entry with item id `2`, the tool lists
+that entry first with `match_kind: "exact_name"` and `ambiguous: false`. Searching
+for `cannonball` can return several candidates, so check the names and ids before
+choosing one. Names and matches depend on the current mapping.
 
 ### Limitations
 
