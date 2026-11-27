@@ -1,0 +1,346 @@
+//! Finds section headings in wikitext without interpreting anything else.
+//!
+//! A heading is a line that starts and ends with `=` signs. Lines inside
+//! comments, raw-text tags and template calls are not headings, so the scanner
+//! tracks just enough state to know that. It never expands, renders or executes
+//! anything.
+
+use std::ops::Range;
+
+/// Tags whose content is literal text, so headings inside it do not count.
+const RAW_TAGS: [&str; 5] = ["nowiki", "pre", "syntaxhighlight", "source", "math"];
+const MAX_HEADING_LEVEL: usize = 6;
+
+/// A heading line and where its section's body begins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Heading {
+    /// 1 to 6, from the shorter side of the surrounding `=` signs.
+    pub(super) level: u8,
+    /// The heading text between the `=` signs, trimmed. Markup is kept raw.
+    pub(super) title: String,
+    /// Byte range of the heading line, without its line ending.
+    pub(super) line: Range<usize>,
+    /// Byte offset of the first byte after the heading line and its ending.
+    pub(super) body_start: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Region {
+    Plain,
+    Comment,
+    /// Inside the raw-text tag at this index of [`RAW_TAGS`].
+    Raw(usize),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScanState {
+    region: Region,
+    /// How many `{{` are open. Template arguments may span lines.
+    template_depth: usize,
+}
+
+/// There are more headings than the caller allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TooManyHeadings;
+
+/// Returns the headings of `text` in document order.
+///
+/// # Errors
+///
+/// Returns [`TooManyHeadings`] if there are more than `max_headings`, without
+/// scanning further.
+pub(super) fn find_headings(
+    text: &str,
+    max_headings: usize,
+) -> Result<Vec<Heading>, TooManyHeadings> {
+    let mut headings = Vec::new();
+    let mut state = ScanState {
+        region: Region::Plain,
+        template_depth: 0,
+    };
+    let mut offset = 0;
+    for raw_line in text.split_inclusive('\n') {
+        let line_end = offset + raw_line.len();
+        let line = raw_line.trim_end_matches('\n').trim_end_matches('\r');
+        let at_top_level = state.region == Region::Plain && state.template_depth == 0;
+        if let Some((level, title)) = parse_heading(line).filter(|_| at_top_level) {
+            if headings.len() >= max_headings {
+                return Err(TooManyHeadings);
+            }
+            headings.push(Heading {
+                level,
+                title,
+                line: offset..offset + line.len(),
+                body_start: line_end,
+            });
+        }
+        advance(&mut state, line);
+        offset = line_end;
+    }
+    Ok(headings)
+}
+
+/// Parses `== Title ==`. The level is the shorter run of `=`; extra `=` on the
+/// longer side stay in the title, as `MediaWiki` does.
+fn parse_heading(line: &str) -> Option<(u8, String)> {
+    let line = strip_trailing_comments(line.trim_end());
+    let opening = line.bytes().take_while(|&byte| byte == b'=').count();
+    let closing = line.bytes().rev().take_while(|&byte| byte == b'=').count();
+    if opening == 0 || closing == 0 || opening + closing >= line.len() {
+        return None;
+    }
+    let level = opening.min(closing).min(MAX_HEADING_LEVEL);
+    let title = line[level..line.len() - level].trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some((u8::try_from(level).ok()?, title.to_owned()))
+}
+
+/// Drops complete `<!-- ... -->` comments that end the line, which may follow a
+/// heading.
+fn strip_trailing_comments(mut line: &str) -> &str {
+    while let Some(without_end) = line.strip_suffix("-->") {
+        let Some(start) = without_end.rfind("<!--") else {
+            break;
+        };
+        line = line[..start].trim_end();
+    }
+    line
+}
+
+/// Updates the state for the text of one line.
+fn advance(state: &mut ScanState, line: &str) {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let rest = &bytes[index..];
+        match state.region {
+            Region::Comment => match find(rest, b"-->") {
+                Some(end) => {
+                    state.region = Region::Plain;
+                    index += end + 3;
+                }
+                None => return,
+            },
+            Region::Raw(tag) => match find_closing_tag(rest, RAW_TAGS[tag]) {
+                Some(end) => {
+                    state.region = Region::Plain;
+                    index += end;
+                }
+                None => return,
+            },
+            Region::Plain => index += advance_plain(state, rest),
+        }
+    }
+}
+
+/// Consumes one construct in plain text and returns how many bytes it spanned.
+fn advance_plain(state: &mut ScanState, rest: &[u8]) -> usize {
+    if rest.starts_with(b"<!--") {
+        state.region = Region::Comment;
+        4
+    } else if rest.starts_with(b"{{") {
+        state.template_depth += 1;
+        2
+    } else if rest.starts_with(b"}}") {
+        state.template_depth = state.template_depth.saturating_sub(1);
+        2
+    } else if rest.starts_with(b"<") {
+        advance_tag(state, rest)
+    } else {
+        1
+    }
+}
+
+/// Handles `<` in plain text: an opening raw-text tag starts a raw region.
+fn advance_tag(state: &mut ScanState, rest: &[u8]) -> usize {
+    let Some((tag, name_end)) = raw_tag_at(rest) else {
+        return 1;
+    };
+    let Some(close) = rest.iter().position(|&byte| byte == b'>') else {
+        return rest.len();
+    };
+    let self_closing = rest[..close].ends_with(b"/");
+    if !self_closing {
+        state.region = Region::Raw(tag);
+    }
+    close.max(name_end) + 1
+}
+
+/// The raw-text tag opened at the start of `rest`, with the length of its name
+/// including the `<`.
+fn raw_tag_at(rest: &[u8]) -> Option<(usize, usize)> {
+    RAW_TAGS.iter().enumerate().find_map(|(index, name)| {
+        let end = name.len() + 1;
+        let matches_name = rest.get(1..end)?.eq_ignore_ascii_case(name.as_bytes());
+        let delimited = matches!(rest.get(end), Some(b'>' | b' ' | b'/' | b'\t'));
+        (matches_name && delimited).then_some((index, end))
+    })
+}
+
+/// The offset just after the first `</name ...>` in `rest`, or the end of
+/// `rest` if the closing tag has no `>` on this line.
+fn find_closing_tag(rest: &[u8], name: &str) -> Option<usize> {
+    let mut index = 0;
+    while let Some(found) = find(&rest[index..], b"</") {
+        let start = index + found;
+        let name_range = start + 2..start + 2 + name.len();
+        if rest
+            .get(name_range)
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name.as_bytes()))
+        {
+            return Some(
+                rest[start..]
+                    .iter()
+                    .position(|&byte| byte == b'>')
+                    .map_or(rest.len(), |close| start + close + 1),
+            );
+        }
+        index = start + 2;
+    }
+    None
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headings(text: &str) -> Vec<(u8, String)> {
+        find_headings(text, 1000)
+            .unwrap()
+            .into_iter()
+            .map(|heading| (heading.level, heading.title))
+            .collect()
+    }
+
+    fn titled(level: u8, title: &str) -> (u8, String) {
+        (level, title.to_owned())
+    }
+
+    #[test]
+    fn finds_headings_of_each_level_in_order() {
+        let text = "intro\n= One =\na\n== Two ==\nb\n=== Three ===\n====== Six ======\n";
+        assert_eq!(
+            headings(text),
+            [
+                titled(1, "One"),
+                titled(2, "Two"),
+                titled(3, "Three"),
+                titled(6, "Six")
+            ]
+        );
+    }
+
+    #[test]
+    fn records_where_each_heading_line_and_body_are() {
+        let text = "lead\n== A ==\nbody\n";
+        let found = find_headings(text, 10).unwrap();
+        assert_eq!(&text[found[0].line.clone()], "== A ==");
+        assert_eq!(&text[found[0].body_start..], "body\n");
+    }
+
+    #[test]
+    fn the_shorter_side_sets_the_level_and_extra_signs_stay_in_the_title() {
+        assert_eq!(headings("=== A ==\n"), [titled(2, "= A")]);
+        assert_eq!(headings("== A ====\n"), [titled(2, "A ==")]);
+        assert_eq!(headings("======= Deep =======\n"), [titled(6, "= Deep =")]);
+    }
+
+    #[test]
+    fn whitespace_and_trailing_comments_around_a_heading_are_allowed() {
+        assert_eq!(headings("==A==  \n"), [titled(2, "A")]);
+        assert_eq!(headings("== A == <!-- note --> \n"), [titled(2, "A")]);
+        assert_eq!(headings("== A ==\r\nbody\r\n"), [titled(2, "A")]);
+    }
+
+    #[test]
+    fn lines_that_only_look_like_headings_are_not_headings() {
+        for text in [
+            "====\n",
+            "==\n",
+            "== A\n",
+            "A ==\n",
+            "= =\n",
+            " == A ==\n",
+            "text == A ==\n",
+            "==  ==\n",
+        ] {
+            assert_eq!(headings(text), [], "{text:?}");
+        }
+    }
+
+    #[test]
+    fn headings_inside_comments_are_ignored() {
+        assert_eq!(
+            headings("<!--\n== Hidden ==\n-->\n== Shown ==\n"),
+            [titled(2, "Shown")]
+        );
+        assert_eq!(
+            headings("a <!-- x --> b\n== Shown ==\n"),
+            [titled(2, "Shown")]
+        );
+    }
+
+    #[test]
+    fn headings_inside_literal_tags_are_ignored() {
+        for text in [
+            "<nowiki>\n== Hidden ==\n</nowiki>\n== Shown ==\n",
+            "<PRE>\n== Hidden ==\n</pre>\n== Shown ==\n",
+            "<syntaxhighlight lang=\"x\">\n== Hidden ==\n</syntaxhighlight>\n== Shown ==\n",
+            "<math>\n== Hidden ==\n</math >\n== Shown ==\n",
+        ] {
+            assert_eq!(headings(text), [titled(2, "Shown")], "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_self_closing_literal_tag_does_not_open_a_region() {
+        assert_eq!(headings("<nowiki />\n== Shown ==\n"), [titled(2, "Shown")]);
+    }
+
+    #[test]
+    fn tags_that_merely_start_like_a_literal_tag_do_not_open_one() {
+        assert_eq!(headings("<prefix>\n== Shown ==\n"), [titled(2, "Shown")]);
+        assert_eq!(headings("<sourcery>\n== Shown ==\n"), [titled(2, "Shown")]);
+    }
+
+    #[test]
+    fn headings_inside_multiline_templates_are_ignored() {
+        let text =
+            "{{Box\n|text=\n== Hidden ==\n|other={{Inner|x}}\n== Also hidden ==\n}}\n== Shown ==\n";
+        assert_eq!(headings(text), [titled(2, "Shown")]);
+    }
+
+    #[test]
+    fn unbalanced_braces_cannot_hide_the_rest_forever() {
+        // A stray `}}` must not make depth negative and swallow later braces.
+        assert_eq!(headings("}}\n{{A}}\n== Shown ==\n"), [titled(2, "Shown")]);
+    }
+
+    #[test]
+    fn an_unclosed_comment_or_literal_tag_runs_to_the_end_without_panicking() {
+        assert_eq!(headings("<!-- never closed\n== Hidden ==\n"), []);
+        assert_eq!(headings("<nowiki>\n== Hidden ==\n"), []);
+        assert_eq!(headings("<nowiki"), []);
+    }
+
+    #[test]
+    fn non_ascii_text_is_handled_on_character_boundaries() {
+        assert_eq!(headings("é<é{{é\n== Äpfel ☕ ==\n"), []);
+        assert_eq!(headings("é<é\n== Äpfel ☕ ==\n"), [titled(2, "Äpfel ☕")]);
+    }
+
+    #[test]
+    fn too_many_headings_is_an_error_instead_of_unbounded_growth() {
+        let text = "= a =\n= b =\n= c =\n";
+        assert_eq!(find_headings(text, 3).map(|found| found.len()), Ok(3));
+        assert_eq!(find_headings(text, 2), Err(TooManyHeadings));
+    }
+}
