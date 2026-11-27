@@ -51,24 +51,26 @@ The Hardcore `latest` price for item 4151 (8,000,000, last high seen about 12 da
 
 ## Local verification procedure
 
-One procedure, run by a maintainer from a normal machine. Nothing here is run by CI. It was last run on 2026-11-26 (see "Live verification result").
+One procedure, run by a maintainer from a normal machine. Nothing here is run by CI or `scripts/check.sh`.
 
-1. `python3 scripts/verify_hardcore_api.py --compare-standard` (Python 3 standard library only; no installs).
-   - Sends six sequential GET requests two seconds apart: `mapping`, `latest?id=4151`, `5m`, `1h` and `timeseries?id=4151&lookback=24h` on `osrs-hc`, plus one `latest?id=4151` on the standard `osrs` path for comparison only.
-   - Uses the same User-Agent format as the Rust client's default, `osrs-mcp/<Cargo version> (+https://github.com/whcas/OSRS-MCP)`, with a 30 s timeout and an 8 MiB body cap. It writes nothing to disk.
-   - `python3 scripts/verify_hardcore_api.py --self-test` checks the summariser offline.
-   - macOS on Apple Silicon: `python3` (3.8 or newer; the script is tested against 3.13) comes with the Xcode Command Line Tools (`xcode-select --install`) or Homebrew, and `curl` is built in. Run from a terminal at the repository root. No other tools or packages are needed.
-2. Expected output: each request reports status 200, then headers (record `Cache-Control`, `Date`, `Last-Modified` and any rate-limit headers, none of which have been observed yet), then a compact schema summary. Final line `6/6 requests verified`.
-3. Compare against this document and fix anything that differs: field names and types, `1h`'s top-level `timestamp`, which `mapping` fields can be absent, and the semantic checks the script prints (null averages with non-zero volume, averages with more than two decimals, timestamp multiples of 300 and 3600).
-4. A non-200 status (for example 403 for a blocked User-Agent, or 429) is itself a result: record it, do not retry in a loop.
-5. Paste the output into the PR. It contains no bulk data. It does not settle whether volume counts items or transactions, or the side semantics of the aggregates; those need a source statement or a controlled observation.
+```sh
+OSRS_MCP_LIVE_API=1 cargo test --locked --test live_hardcore_api -- --ignored --nocapture
+```
+
+- `tests/live_hardcore_api.rs` is `#[ignore]`d and also needs `OSRS_MCP_LIVE_API=1`, so it cannot run by accident.
+- It uses `ClientConfig::default()` (the project User-Agent `osrs-mcp/<Cargo version> (+https://github.com/whcas/OSRS-MCP)`, a 30 s timeout and an 8 MiB body cap), makes six sequential requests two seconds apart (`mapping`, `latest?id=4151`, `5m`, `5m` scoped to the start it just returned, `1h`, `timeseries` 24h) and never retries.
+- A second ignored test, `the_real_bulk_latest_response_satisfies_the_required_field_rule`, makes one bulk `latest` request (run it alone, once, by name). Both assert structural facts only (Hardcore provenance, source URL, boundaries of the `5m` and `1h` timestamps, the sample item present, a positive timestep) and prints counts, never bodies. It writes nothing to disk.
+- Last run 2026-11-26, with the object-only parser: passed (mapping 4682 items, `5m` 450, scoped `5m` 450, `1h` 1182, `timeseries` 65 points).
+- A failure is a result: it means the real API or the client's expectations drifted. Record it, compare with this document, and fix the client or the document; do not retry in a loop. A non-200 status (for example 403 for a blocked User-Agent, or 429) is likewise a result.
+
+The first live check used a throwaway Python script (`scripts/verify_hardcore_api.py`, since retired, see the git history of PR #24) that also printed response headers and compared one standard-world request. Its findings are recorded below. If header-level checks are needed again, expose them from the client instead of keeping a parallel script. This procedure does not settle whether volume counts items or transactions, or the side semantics of the aggregates; those need a source statement or a controlled observation.
 
 Refreshing fixtures in `tests/fixtures/hardcore_ge/` (PR #29) is manual and small, after step 3 shows the schema holds:
 
 ```sh
 UA="osrs-mcp/0.1.0 (+https://github.com/whcas/OSRS-MCP)"   # match Cargo.toml's version
-curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/latest?id=4151' | python3 -m json.tool
-curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/timeseries?id=4151&lookback=24h' | python3 -m json.tool
+curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/latest?id=4151'
+curl -sS -A "$UA" 'https://prices.runescape.wiki/api/v2/osrs-hc/timeseries?id=4151&lookback=24h'
 ```
 
 Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one entry with a null side, update the provenance table in the fixtures' README to say which are real captures and which synthetic, and commit only the trimmed files. Never commit a full response.
@@ -87,12 +89,14 @@ Trim bulk endpoints (`5m`, `1h`, `mapping`) by hand to a few entries, keep one e
 | `timeseries` points are contiguous at `timestep` | **Not so, as observed.** The header said 300, but the first two sampled points are 600 s apart (1795602300 then 1795602900) while the last two are 300 s apart, so steps with no trades appear to be omitted (inferred). Clients must not assume a gap-free series. The documentation also says the timestep is not guaranteed |
 | Averages have at most two decimals | Stated by the documentation; the observed values (e.g. `227.22`) are consistent. Over-precise values are rejected rather than rounded by the client |
 | `1h` top-level `timestamp`, `mapping` entry count and optional fields, response headers, User-Agent acceptance | **Observed** from the maintainer's Mac on 2026-11-26 with the project User-Agent; see "Live verification result" below |
-| Error bodies (4xx/5xx), rate-limit headers | **Not observed**: every request returned 200 and no `X-RateLimit-*` or `Retry-After` header was present |
+| Window timestamp handling | **Observed (2026-11-26, 4 requests)**: `5m?timestamp=` with a 300 s-aligned value is echoed back exactly in the response `timestamp`. An unaligned value, a value one day in the future, and `1` each returned **HTTP 400** with a 46-byte JSON body of the form `{"error": ...}`. The client therefore requires a scoped response's timestamp to equal the requested one |
+| Bulk `latest` (no `id`) | **Observed (2026-11-26, one request, real Rust client)**: 2868 items; every entry carried all four keys (`high`, `highTime`, `low`, `lowTime`), so the client's required-field rule holds. 502 entries were one-sided and none had neither side, so a never-traded item is absent from the bulk response rather than present with four nulls |
+| Rate-limit headers, 429/5xx bodies | **Not observed**: no `X-RateLimit-*` or `Retry-After` header was present, and no 429 or 5xx was provoked |
 | Hardcore GE fee | **Maintainer-observed, not from the API:** 0% in the in-game Convenience Fees UI on 2026-11-26 (#14, #20). The API says nothing about fees, so this is a limit of what the API tells us, not an unknown fee. Not independently verified against live trades |
 
 ## Live verification result (2026-11-26, 11:34 UTC)
 
-`python3 scripts/verify_hardcore_api.py --compare-standard` was run locally (macOS, unrestricted network) with the project User-Agent `osrs-mcp/0.1.0 (+https://github.com/whcas/OSRS-MCP)`. Result: `6/6 requests verified`, all HTTP 200, `Content-Type: application/json; charset=utf-8`, so the project User-Agent is accepted. The schema matches the documented one; nothing in the earlier fetch-tool reading was contradicted.
+The since-retired `scripts/verify_hardcore_api.py --compare-standard` was run locally (macOS, unrestricted network) with the project User-Agent `osrs-mcp/0.1.0 (+https://github.com/whcas/OSRS-MCP)`. Result: `6/6 requests verified`, all HTTP 200, `Content-Type: application/json; charset=utf-8`, so the project User-Agent is accepted. The schema matches the documented one; nothing in the earlier fetch-tool reading was contradicted.
 
 | Observation | Value |
 | --- | --- |
@@ -129,55 +133,26 @@ Still **inferred or unknown**, not settled by this run: item versus transaction 
 - No numeric rate limit. Access may be restricted if usage "threatens the stability" of the API, described as multiple large queries per second sustained. Fetch `/latest` without `id` rather than looping, and avoid polling; the bulk endpoints are cached.
 - Content is CC BY-NC-SA 3.0 with additional terms; RuneScape marks belong to Jagex. No separate API attribution is stated. We should credit the OSRS Wiki as the source in tool output and docs, and not redistribute dumps of the data (also required by `AGENTS.md`).
 
-## Proposed minimal Rust client (for #18): original sketch, superseded
+## Client design (implemented in #18)
 
-This sketch predates the implementation and differs from it: prices and averages are unsigned (`u64`) types from `crate::domain` and are not converted to `Gp`, timestamps are `UnixSeconds`, and `Freshness` also has a `Future` variant. The implemented types and error model in `src/market` are the reference; keep this block only as the original proposal. Keep it independent of MCP and persistence.
-
-```rust
-/// Chosen at construction; there is no default and no fallback.
-pub enum WorldType { Hardcore }          // Standard added only if a feature needs it
-
-pub struct Provenance { world_type: WorldType, endpoint: Endpoint, retrieved_at: SystemTime }
-
-pub struct Observed<T> { value: T, provenance: Provenance }
-
-pub struct ItemId(u32);
-pub struct Gp(i64);                       // reuse crate::profit::Gp
-pub struct AveragePrice { hundredths: i64 }      // two decimal places, exact
-
-pub struct LatestPrice { high: Option<Timed<Gp>>, low: Option<Timed<Gp>> }
-pub struct WindowStats { avg_high: Option<AveragePrice>, high_volume: u64,
-                         avg_low: Option<AveragePrice>,  low_volume: u64 }
-pub struct Window { start: UnixSeconds, length: WindowLength }   // 5m or 1h
-
-impl HardcoreClient {
-    pub async fn mapping(&self) -> Result<Observed<Vec<ItemInfo>>, MarketDataError>;
-    pub async fn latest(&self, item: Option<ItemId>) -> Result<Observed<BTreeMap<ItemId, LatestPrice>>, _>;
-    pub async fn window(&self, length: WindowLength, at: Option<UnixSeconds>)
-        -> Result<Observed<BTreeMap<ItemId, WindowStats>>, _>;
-    pub async fn timeseries(&self, item: ItemId, lookback: Lookback) -> Result<Observed<Series>, _>;
-}
-
-/// Staleness is a pure function so it is testable without a clock.
-pub fn classify_age(observed: UnixSeconds, now: UnixSeconds, max_age: Duration) -> Freshness; // Fresh | Stale
-```
-
-Error model, one enum, no variant for "fell back to standard":
-
-- `Transport` (connect error, timeout, TLS)
-- `Http { status }` (non-success, including 429 and 403 for a blocked UA)
-- `Malformed { endpoint, reason }` (not JSON, wrong shape, negative or non-integer price, unknown `lookback`)
-- `ResponseTooLarge { limit }` (bounded body handling)
-
-Missing data is not an error; it is `Option`/absent in the typed result. Stale data is not an error either; it is reported by `classify_age` so callers can show it.
-
-Dependencies, to justify in #18: `reqwest` (rustls, JSON off; parse with `serde_json` ourselves to keep the body bound), `serde`, `serde_json`, `tokio` (for the async client). Timeouts and a response size cap are set explicitly on the client.
+The proposal made during the investigation is implemented in `src/market`, whose module and type documentation is now the reference for the types, the error model and the dependencies; the earlier sketch is not repeated here because it no longer matches the code. The constraints it set still hold: independent of MCP and persistence, one GET per call with bounded size and explicit timeouts, results always labelled Hardcore with provenance, no variant or code path for falling back to standard-world data, and missing or stale data reported as such rather than as an error.
 
 ## Fixture strategy
 
 - Small hand-trimmed JSON bodies under `tests/fixtures/hardcore_ge/`, derived from the samples above and then replaced with `curl`-captured bodies: a `latest` with a one-sided price, a `latest` for a never-traded item (absent key), a `5m` with `null` averages and zero volume, a `timeseries` with a null side, and a malformed body. No full dumps.
 - Parsing tested directly against fixtures; client behaviour tested against a local in-process HTTP server (status errors, timeouts, oversized body, wrong world path). CI makes no live requests.
 - An ignored, manually run test may hit the live API for contract drift checks; it is never part of `scripts/check.sh`.
+
+## Implementation notes (#18)
+
+The client in `src/market/` follows the sketch above with these differences:
+
+- Item ids, prices, average prices and timestamps use the shared `domain` types (`ItemId`, `Price`, `AveragePrice`, `UnixSeconds`, from #39), not definitions of this module. The client does not convert prices to the signed `Gp` used by the profit primitives; `AveragePrice` has no conversion to a whole-GP price because rounding an average is an analysis decision.
+- `reqwest` 0.13 puts query-string support behind a feature, so query parameters are built with `Url::query_pairs_mut`.
+- The mapping response is parsed with only `id` and `name` required; the live check showed `limit`, `value`, `highalch` and `lowalch` can be absent, so the parser's choice is confirmed.
+- Fixtures in `tests/fixtures/hardcore_ge/` are partly synthetic; see the README there.
+- The client's endpoint is fixed to the real `osrs-hc` base URL, with no public way to change it, and it records the exact source URL in provenance, validates scoped responses against the request, and reports observations dated in the future as such. These follow review feedback and are covered by regression tests.
+- The client was checked against the live API on 2026-11-26 with the opt-in test in "Local verification procedure". Only HTTP 400 for bad window timestamps has been observed among error responses; 403, 429 and 5xx remain unobserved.
 
 ## Trade-offs and recommendation
 
@@ -189,6 +164,6 @@ Dependencies, to justify in #18: `reqwest` (rustls, JSON off; parse with `serde_
 
 1. ~~Hardcore GE tax~~: maintainer-observed 0% in the in-game Convenience Fees UI on 2026-11-26 (#14, #20); not derivable from the API.
 2. ~~Exact `1h` top-level `timestamp` and optional `mapping` fields~~: answered by the live verification result.
-3. ~~Real response headers~~: observed. Rate-limit behaviour under load and non-200 responses remain unobserved.
+3. ~~Real response headers~~: observed. Rate-limit behaviour under load, and 403/429/5xx responses, remain unobserved; 400 for bad window timestamps is observed.
 4. Whether `highPriceVolume` and `lowPriceVolume` count items or transactions.
 5. Whether the aggregate endpoints' "high" and "low" sides match `latest`'s instant-buy and instant-sell sides.
