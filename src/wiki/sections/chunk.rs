@@ -542,6 +542,22 @@ mod tests {
     }
 
     #[test]
+    fn a_references_tag_is_not_a_footnote_caveat_but_a_ref_tag_is() {
+        let claim = "This claim line is thirty b.";
+        assert_eq!(
+            labelled(&format!("{claim}\n<references />"), 40),
+            [(claim, vec![]), ("<references />", vec![])]
+        );
+        assert_eq!(
+            labelled(&format!("{claim}\n<ref>x</ref>"), 40),
+            [
+                (claim, vec![Loss::SplitCaveat]),
+                ("<ref>x</ref>", vec![Loss::SplitCaveat]),
+            ]
+        );
+    }
+
+    #[test]
     fn a_chain_of_caveats_joins_as_far_as_the_bound_allows() {
         let text = "claim\nNote: a\nHowever, b\nNote: c";
         let result = labelled(text, 24);

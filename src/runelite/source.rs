@@ -21,7 +21,8 @@ use thiserror::Error;
 
 use super::{
     CharacterExport, CharacterParseError, ContainerKind, ContainerParseError, ContainerSnapshot,
-    MAX_CONTAINER_EXPORT_BYTES, parse_character_export, parse_container_export,
+    MAX_CONTAINER_EXPORT_BYTES, MAX_QUEST_EXPORT_BYTES, QuestParseError, QuestProgress,
+    parse_character_export, parse_container_export, parse_quest_export,
 };
 
 /// Environment variable naming the account's Character Exporter directory,
@@ -39,6 +40,9 @@ pub const INVENTORY_FILE_NAME: &str = "inventory.json";
 
 /// Equipment file.
 pub const EQUIPMENT_FILE_NAME: &str = "equipment.json";
+
+/// Quest progress file.
+pub const QUEST_FILE_NAME: &str = "quests.json";
 
 /// The only file this module reads for `kind`.
 #[must_use]
@@ -150,6 +154,25 @@ impl LocalExportSource {
             .map_err(ExportReadError::Parse)
     }
 
+    /// Reads and parses `quests.json`.
+    ///
+    /// Reads and failures behave as for [`read_character`](Self::read_character),
+    /// with the limit [`MAX_QUEST_EXPORT_BYTES`]. A missing file is
+    /// [`ExportReadError::FileNotFound`]; it never means that no quest is
+    /// started, and a quest absent from a valid file is unrecorded rather than
+    /// not started. The file has its own `exported_at`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExportReadError`] if nothing is configured, the file cannot
+    /// be read within the limit, or its content is not a valid export.
+    pub fn read_quests(&self) -> Result<QuestProgress, ExportReadError> {
+        let bytes = self.read_file(QUEST_FILE_NAME, quest_limit())?;
+        parse_quest_export(&bytes)
+            .map_err(ParseFailure::from)
+            .map_err(ExportReadError::Parse)
+    }
+
     fn read_file(&self, file_name: &str, limit: u64) -> Result<Vec<u8>, ExportReadError> {
         let directory = self
             .directory
@@ -162,6 +185,11 @@ impl LocalExportSource {
 /// The container parser's byte limit as the reader's unit.
 fn container_limit() -> u64 {
     u64::try_from(MAX_CONTAINER_EXPORT_BYTES).unwrap_or(u64::MAX)
+}
+
+/// The quest parser's byte limit as the reader's unit.
+fn quest_limit() -> u64 {
+    u64::try_from(MAX_QUEST_EXPORT_BYTES).unwrap_or(u64::MAX)
 }
 
 /// Why an export file could not be read and imported.
@@ -220,6 +248,9 @@ pub enum ParseFailure {
     /// A bank, inventory or equipment file was rejected.
     #[error(transparent)]
     Container(#[from] ContainerParseError),
+    /// `quests.json` was rejected.
+    #[error(transparent)]
+    Quest(#[from] QuestParseError),
 }
 
 impl ParseFailure {
@@ -229,6 +260,7 @@ impl ParseFailure {
         match self {
             Self::Character(error) => error.is_transient(),
             Self::Container(error) => error.is_transient(),
+            Self::Quest(error) => error.is_transient(),
         }
     }
 }
@@ -533,6 +565,9 @@ mod tests {
         }
     }
 
+    const SYNTHETIC_QUESTS: &[u8] =
+        include_bytes!("../../tests/fixtures/runelite_export/quests.synthetic.json");
+
     const ALL_KINDS: [ContainerKind; 3] = [
         ContainerKind::Bank,
         ContainerKind::Inventory,
@@ -706,6 +741,104 @@ mod tests {
                 .read_container(ContainerKind::Bank)
                 .unwrap_err()
         );
+
+        assert!(!message.contains("private-marker"), "{message}");
+        assert!(!message.contains(&directory_name), "{message}");
+    }
+
+    fn write_quests(dir: &TempDir, content: &[u8]) {
+        fs::write(dir.path().join(QUEST_FILE_NAME), content).unwrap();
+    }
+
+    #[test]
+    fn a_valid_quest_file_is_read_and_parsed() {
+        let dir = new_dir();
+        write_quests(&dir, SYNTHETIC_QUESTS);
+
+        let progress = source_for(&dir).read_quests().unwrap();
+
+        assert_eq!(progress, parse_quest_export(SYNTHETIC_QUESTS).unwrap());
+    }
+
+    #[test]
+    fn a_missing_quest_file_is_not_a_report_that_no_quest_is_started() {
+        let dir = new_dir();
+        write_character(&dir, SYNTHETIC_EXPORT);
+
+        assert_eq!(
+            source_for(&dir).read_quests(),
+            Err(ExportReadError::FileNotFound)
+        );
+    }
+
+    #[test]
+    fn quests_are_read_fresh_each_call() {
+        let dir = new_dir();
+        write_quests(&dir, SYNTHETIC_QUESTS);
+        let source = source_for(&dir);
+        let first = source.read_quests().unwrap();
+
+        let rewritten = String::from_utf8(SYNTHETIC_QUESTS.to_vec())
+            .unwrap()
+            .replace("2026-02-01T11:12:13.123456-02:00", "2026-03-03T08:15Z");
+        write_quests(&dir, rewritten.as_bytes());
+        let second = source.read_quests().unwrap();
+
+        assert_ne!(first.exported_at(), second.exported_at());
+    }
+
+    #[test]
+    fn a_quest_file_over_the_parser_limit_is_rejected_without_being_parsed() {
+        let dir = new_dir();
+        write_quests(&dir, &vec![b' '; MAX_QUEST_EXPORT_BYTES + 1]);
+
+        assert_eq!(
+            source_for(&dir).read_quests(),
+            Err(ExportReadError::TooLarge {
+                limit: quest_limit()
+            })
+        );
+    }
+
+    #[test]
+    fn a_quest_file_exactly_at_the_limit_is_read() {
+        let dir = new_dir();
+        let mut content = SYNTHETIC_QUESTS.to_vec();
+        content.resize(MAX_QUEST_EXPORT_BYTES, b' ');
+        write_quests(&dir, &content);
+
+        assert!(source_for(&dir).read_quests().is_ok());
+    }
+
+    #[test]
+    fn a_truncated_quest_file_is_transient_and_invalid_content_is_not() {
+        let dir = new_dir();
+        write_quests(&dir, &SYNTHETIC_QUESTS[..SYNTHETIC_QUESTS.len() / 2]);
+        assert!(source_for(&dir).read_quests().unwrap_err().is_transient());
+
+        write_quests(&dir, b"this is not json");
+        let error = source_for(&dir).read_quests().unwrap_err();
+
+        assert_eq!(
+            error,
+            ExportReadError::Parse(QuestParseError::InvalidJson.into())
+        );
+        assert!(!error.is_transient());
+    }
+
+    #[test]
+    fn quest_errors_do_not_contain_the_path_or_file_content() {
+        let dir = new_dir();
+        write_quests(&dir, b"{\"private-marker\": 1");
+        let directory_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let error = source_for(&dir).read_quests().unwrap_err();
+        let message = format!("{error:?} {error}");
 
         assert!(!message.contains("private-marker"), "{message}");
         assert!(!message.contains(&directory_name), "{message}");
