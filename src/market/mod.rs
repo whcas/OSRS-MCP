@@ -8,6 +8,8 @@
 //!
 //! - `model`: typed results with explicit units, provenance and [`classify_age`].
 //! - `parse`: pure functions from response bytes to model types.
+//! - `assess`: pure freshness and crossing assessment of latest prices.
+//! - `search`: pure item lookup over a mapping.
 //! - `client`: the only network code, [`HardcoreClient`].
 //!
 //! # Guarantees
@@ -42,14 +44,24 @@
 //! - `tokio` is a dev-dependency only, for the loopback server used by the
 //!   unit tests in `client.rs`.
 
+mod assess;
 mod client;
 mod error;
 mod model;
 mod parse;
+mod search;
 
+pub use assess::{
+    DEFAULT_MAX_AGE_SECONDS, LatestAssessment, MAX_AGE_SECONDS, MaxAge, MaxAgeError,
+    ObservationAge, SideAssessment, assess_latest,
+};
 pub use client::{ClientConfig, ConfigError, HARDCORE_BASE_URL, HardcoreClient};
 pub use error::{MarketDataError, TransportKind};
 pub use model::{
     Endpoint, Freshness, ItemInfo, LatestPrices, Lookback, Observed, PriceWindow, Provenance,
     Series, SeriesPoint, SideStats, TimedPrice, WindowLength, WindowStats, WorldType, classify_age,
+};
+pub use search::{
+    DEFAULT_LIMIT, ItemMatch, ItemQuery, MAX_LIMIT, MAX_NAME_CHARS, MIN_NAME_CHARS, MatchKind,
+    NameQuery, QueryError, ResultLimit, SearchOutcome, search,
 };

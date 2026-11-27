@@ -1,0 +1,12 @@
+{
+  "exported_at": "2026-01-01T13:00+01:00",
+  "plugin_version": "0.6.0",
+  "session_id": "synthetic-session",
+  "reason": "item_container_changed",
+  "kind": "bank",
+  "item_count": 2,
+  "items": [
+    { "slot": 24, "id": 5001, "quantity": 2147483647, "name": "Example hammer" },
+    { "slot": 3, "id": 5001, "quantity": 2, "name": "" }
+  ]
+}
