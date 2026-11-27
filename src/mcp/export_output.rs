@@ -159,7 +159,12 @@ pub(super) fn bounded<T, U>(items: &[T], limit: usize, map: impl Fn(&T) -> U) ->
 
 /// `name` cut to [`MAX_NAME_CHARS`] characters, and whether it was cut.
 pub(super) fn bounded_name(name: &str) -> (String, bool) {
-    match name.char_indices().nth(MAX_NAME_CHARS) {
+    bounded_name_to(name, MAX_NAME_CHARS)
+}
+
+/// `name` cut to `max_chars` characters, and whether it was cut.
+pub(super) fn bounded_name_to(name: &str, max_chars: usize) -> (String, bool) {
+    match name.char_indices().nth(max_chars) {
         Some((end, _)) => (name[..end].to_owned(), true),
         None => (name.to_owned(), false),
     }
