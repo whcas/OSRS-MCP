@@ -181,6 +181,45 @@ fn advance_plain(state: &mut ScanState, rest: &[u8]) -> usize {
     }
 }
 
+/// A comment or literal-tag element, which is not wikitext markup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Literal {
+    /// `<!-- ... -->`, which renders as nothing.
+    Comment(usize),
+    /// A literal-tag element such as `<nowiki>...</nowiki>`, whose content
+    /// renders as plain text.
+    Raw(usize),
+}
+
+impl Literal {
+    /// The element's length in bytes.
+    pub(super) const fn len(self) -> usize {
+        match self {
+            Self::Comment(len) | Self::Raw(len) => len,
+        }
+    }
+}
+
+/// The comment or literal-tag element at the start of `rest`, which may span
+/// lines. An element that is never closed runs to the end of `rest`.
+pub(super) fn literal_at(rest: &[u8]) -> Option<Literal> {
+    if let Some(after_opening) = rest.strip_prefix(b"<!--") {
+        let end = find(after_opening, b"-->").map_or(after_opening.len(), |at| at + 3);
+        return Some(Literal::Comment(4 + end));
+    }
+    let (tag, _) = raw_tag_at(rest)?;
+    let Some(close) = rest.iter().position(|&byte| byte == b'>') else {
+        return Some(Literal::Raw(rest.len()));
+    };
+    let opening_end = close + 1;
+    if rest[..close].ends_with(b"/") {
+        return Some(Literal::Raw(opening_end));
+    }
+    let end = find_closing_tag(&rest[opening_end..], RAW_TAGS[tag])
+        .map_or(rest.len(), |at| opening_end + at);
+    Some(Literal::Raw(end))
+}
+
 /// Handles `<` in plain text: an opening raw-text tag starts a raw region.
 fn advance_tag(state: &mut ScanState, rest: &[u8]) -> usize {
     let Some((tag, name_end)) = raw_tag_at(rest) else {
