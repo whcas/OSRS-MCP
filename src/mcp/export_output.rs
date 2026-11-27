@@ -10,7 +10,7 @@ use rmcp::{
 };
 use serde::Serialize;
 
-use crate::runelite::ExportReadError;
+use crate::runelite::{ExportReadError, ExportedAt};
 
 /// Longest display name returned, in characters. Names come from the export
 /// and are untrusted.
@@ -29,6 +29,57 @@ pub struct ExportedAtOutput {
     pub text: String,
     /// The same instant in UTC, RFC 3339.
     pub utc: String,
+}
+
+/// When the data was last changed and when this server read it.
+///
+/// Shared by the tools that report one export file, so each states its own
+/// file's time and none implies a snapshot consistent with another file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ObservationTime {
+    /// When the exporter last changed the data.
+    pub exported_at: ExportedAtOutput,
+    /// What `exported_at` does and does not mean.
+    pub exported_at_meaning: String,
+    /// When this server read the file (its own clock, UTC, RFC 3339).
+    pub read_at: String,
+    /// Whole seconds from `exported_at` to `read_at`. Elapsed time since the
+    /// last change, not staleness: an unchanged export is not rewritten. Null
+    /// when `exported_at` is later than `read_at`.
+    pub seconds_since_last_change: Option<u64>,
+    /// True if `exported_at` is later than `read_at`, for example because of
+    /// clock differences. The age is then unknown rather than zero.
+    pub exported_at_in_future: bool,
+    /// The exporter plugin version, null if the file has none.
+    pub plugin_version: Option<String>,
+    /// True if the file has a `plugin_version` that is not shown because it
+    /// does not look like a version number.
+    pub plugin_version_suppressed: bool,
+}
+
+impl ObservationTime {
+    /// Describes an export timestamp read at `read_at`.
+    pub(super) fn new(
+        exported_at: &ExportedAt,
+        plugin_version: Option<&str>,
+        read_at: Timestamp,
+    ) -> Self {
+        let observed = exported_at.timestamp();
+        let (plugin_version, plugin_version_suppressed) = shown_version(plugin_version);
+        Self {
+            exported_at: ExportedAtOutput {
+                text: exported_at.text().to_owned(),
+                utc: observed.to_string(),
+            },
+            exported_at_meaning: EXPORTED_AT_MEANING.to_owned(),
+            read_at: read_at.to_string(),
+            seconds_since_last_change: seconds_between(observed, read_at),
+            exported_at_in_future: observed > read_at,
+            plugin_version,
+            plugin_version_suppressed,
+        }
+    }
 }
 
 /// Why no result was produced.

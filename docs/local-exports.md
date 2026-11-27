@@ -61,3 +61,16 @@ Never returned: account name, world, world types, session id, boosted levels, pa
 A failure is an error result (`isError: true`) whose text is JSON with a fixed `status`: `not_configured`, `directory_unavailable`, `file_not_found`, `unreadable` (with `reason`: `not_a_regular_file`, `too_large`, `permission_denied` or `io_error`) or `invalid_export`. `invalid_export` adds `retryable` (true when the file ended unexpectedly, which may be a write in progress but is not proof of one) and a `detail` that never quotes the file. There is no stale fallback.
 
 Example prompt once configured: "Show my skill levels and tell me how old the export is."
+
+## The `bank_contents` tool
+
+Read-only. Reads `bank.json` on each call and returns one page of rows. Input (both optional): `offset` (rows to skip, default 0) and `limit` (1 to 200, default 100); there is no path or file input.
+
+- `rows` keep the file's order. Each has `slot`, `item_id`, `quantity` and an optional `name` (untrusted display text cut to 32 characters, with `name_truncated`). **Repeated item IDs are separate rows**: the exporter lists one row per slot and they are not merged. Identify items by `item_id`.
+- `total_rows`, `offset`, `limit` and `truncated` describe the page. An offset past the end is an empty page, not a failure.
+- An observed empty bank is `status: ok` with `total_rows: 0`. A missing `bank.json` is `file_not_found`, never an empty bank: the exporter writes the bank only after it has been opened, files are not deleted, so a file can also be sessions old. `exported_at` is that file's own time of last change.
+- The same timing fields as `character_summary` (`exported_at`, `read_at`, `seconds_since_last_change`, `exported_at_in_future`, `plugin_version`). This file is **not** guaranteed consistent with any other export file.
+- `warnings` currently report a file whose own `item_count` differs from its rows (`item_count_mismatch`); the rows are returned as listed.
+- No prices, valuation or totals; no account name, world, session id, path or raw JSON.
+
+Failures use the same fixed statuses as `character_summary`, with messages naming `bank.json`.

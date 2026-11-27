@@ -9,6 +9,7 @@
 //! `+` in `new`, which keeps unrelated tool changes from conflicting.
 
 mod character;
+mod containers;
 mod export_output;
 mod info;
 mod market;
@@ -35,7 +36,12 @@ use crate::runelite::LocalExportSource;
 use market_data::MarketData;
 
 pub use character::{CharacterSummary, SkillOutput, SummaryStatus, WarningOutput};
-pub use export_output::{ExportFailure, ExportedAtOutput, FailureStatus, UnreadableReason};
+pub use containers::{
+    ContainerContents, ContainerOutput, ContainerRowOutput, ContainerWarningOutput, ContentsStatus,
+};
+pub use export_output::{
+    ExportFailure, ExportedAtOutput, FailureStatus, ObservationTime, UnreadableReason,
+};
 
 /// A failed `character_summary` call; the failure shape is shared by all
 /// account tools.
@@ -77,6 +83,7 @@ impl OsrsMcpServer {
         Self {
             tool_router: Self::info_router()
                 + Self::character_router()
+                + Self::containers_router()
                 + Self::market_router()
                 + Self::prices_router(),
             market,
