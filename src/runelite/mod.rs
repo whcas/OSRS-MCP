@@ -35,6 +35,6 @@ pub use skill::Skill;
 pub use source::{
     BANK_FILE_NAME, CHARACTER_FILE_NAME, EQUIPMENT_FILE_NAME, EXPORT_DIR_VAR, ExportReadError,
     INVENTORY_FILE_NAME, LocalExportSource, MAX_CHARACTER_EXPORT_BYTES, ParseFailure,
-    container_file_name,
+    QUEST_FILE_NAME, container_file_name,
 };
 pub use timestamp::ExportedAt;
