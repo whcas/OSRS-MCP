@@ -29,8 +29,15 @@
 //! revision of a page is kept. The source is identified by the site name,
 //! database name and base URL of the export header, which is unverified
 //! provenance (see [`SourceId`]).
+//!
+//! # Lookup
+//!
+//! [`Store::page_by_title`] finds the page with an exact title and
+//! [`Store::resolve`] follows redirects from it, reporting a missing target, a
+//! loop or an ambiguous title as a [`Resolution`] rather than an empty result.
 
 mod error;
+mod lookup;
 mod schema;
 
 use std::ops::Range;
@@ -43,6 +50,7 @@ use super::{
     RevisionId, RevisionTimestamp, SourceId, prepare,
 };
 pub use error::{Operation, StoreError};
+pub use lookup::{Resolution, TitleMatch};
 
 /// Separates the entries of a list stored in one text column. None of the
 /// stored names (headings, templates, link targets) can contain a line break.
@@ -701,13 +709,13 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    struct Fixture {
+    pub(super) struct Fixture {
         directory: TempDir,
-        source: SourceId,
+        pub(super) source: SourceId,
     }
 
     impl Fixture {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             Self {
                 directory: TempDir::new().unwrap(),
                 source: SourceId::new(
@@ -723,12 +731,12 @@ mod tests {
             self.directory.path().join("wiki.sqlite")
         }
 
-        fn open(&self) -> Store {
+        pub(super) fn open(&self) -> Store {
             Store::open(&self.path()).unwrap()
         }
     }
 
-    fn page(id: u64, revision: u64, text: &str) -> ImportedPage {
+    pub(super) fn page(id: u64, revision: u64, text: &str) -> ImportedPage {
         ImportedPage {
             id: PageId::new(id).unwrap(),
             namespace: 0,
@@ -741,7 +749,11 @@ mod tests {
         }
     }
 
-    fn import(store: &mut Store, source: &SourceId, pages: &[ImportedPage]) -> ImportSummary {
+    pub(super) fn import(
+        store: &mut Store,
+        source: &SourceId,
+        pages: &[ImportedPage],
+    ) -> ImportSummary {
         let mut session = store
             .begin_import(source, PrepareLimits::default())
             .unwrap();
@@ -751,7 +763,7 @@ mod tests {
         session.commit().unwrap()
     }
 
-    fn page_id(id: u64) -> PageId {
+    pub(super) fn page_id(id: u64) -> PageId {
         PageId::new(id).unwrap()
     }
 
