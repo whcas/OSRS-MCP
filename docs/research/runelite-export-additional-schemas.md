@@ -10,7 +10,7 @@ Research for [#62](https://github.com/whcas/OSRS-MCP/issues/62). Status: **sourc
   - Throttled exports are **dropped, not deferred**. A change that lands inside the throttle window is not written until the next change.
   - `bank.json` is only written after the bank has been opened, and files are never deleted, so a bank file can be sessions old.
   - Item IDs are **canonicalised**: noted items and placeholders collapse to the base item ID, so a stack of noted items is indistinguishable from the unnoted stack.
-  - Diary `tasks` lists exist only if the diary journal was opened in the same session, so their presence is not reliable.
+  - Diary `tasks` lists exist only if the diary journal was opened in the same session, so their presence is not reliable, and the diary fields are independent observations that need not agree.
   - Combat-achievement per-task data comes from a hard-coded list of 637 struct IDs and silently reports zeros if that list cannot be resolved.
 - Recommended parser order: containers (bank, equipment, inventory), then quests, then diaries. Combat achievements and the collection log are identified for later work only.
 - Account mode is never inferred from any of these files, including `world_types`.
@@ -117,25 +117,30 @@ Transport-independent, separate from the input DTO (same approach as `character.
 
 ```text
 ContainerKind        Bank | Inventory | Equipment      (seed vault: not modelled)
-ItemStack            { item_id: ItemId, quantity: NonZeroU32 }
-ContainerRow         { slot: u16, stack: ItemStack }
+ItemStack            { item_id: ItemId, quantity: Quantity }
+ContainerRow         { slot: u16, stack: ItemStack, display_name: Option<BoundedText> }
 ContainerSnapshot    { kind, exported_at (text + instant), plugin_version (text), rows: Vec<ContainerRow> }
 ```
 
-- `name` is **not retained**: it is a lossy display string, and the structured item data can supply names. This also avoids carrying untrusted client strings. (If a later workflow needs names for unknown IDs, add them then.)
-- `ItemId` should reuse the shared domain type used by the Hardcore GE client; this document does not assume its name. `quantity` as `NonZeroU32` encodes the `1..=i32::MAX` invariant structurally; upper bound is a validation error.
+- `name` is retained as an **optional, bounded display name and untrusted data**. Quest and untradeable items need not exist in the Grand Exchange item mapping, so the file may be the only local source of a name, and resolving names by a network call is unnecessary. The `id` is the key; a name is never an identifier, is never used to match or deduplicate rows, and is never trusted as instructions. An empty name (the exporter's failed-lookup value) becomes `None`. Over-long names are rejected or truncated with an explicit marker, a policy for the parser PR to fix (not silently shortened and presented as the original).
+- `ItemId` and `Quantity` reuse the shared `crate::domain` types (`ItemId(u32)`, `Quantity` over `NonZeroU64`). The exporter's quantity is a Java `int`, so a quantity above `i32::MAX` is a validation error even though `Quantity` could hold it.
 - Typed errors (no values): wrong top-level shape, `items` missing or not an array, row field missing or wrong type, `id` or `quantity` not positive, `quantity` above `i32::MAX`, duplicate `slot`, `kind` present but disagreeing with the requested container, row count above the limit, truncated input, other invalid JSON.
-- Warnings (non-fatal): `item_count` mismatch, unknown envelope fields ignored silently, empty `name` ignored silently.
+- Warnings (non-fatal): `item_count` mismatch, unknown envelope fields ignored silently, a `name` that is empty (becomes `None`).
 - Equipment: map `slot` to a named slot only when it is in `0..=13`; keep an out-of-range slot as a warning rather than failing, since a newer client may add slots. A named equipment-slot type is a separate small decision and should not be required for the container parser.
 - Compatibility: accept any `plugin_version`; no schema version exists.
 - Duplicate IDs: keep rows as read; aggregation helper (total quantity per item) is deterministic and belongs in the domain layer, not the parser.
 
 ### Advisory usefulness
 
-- **Bank**: highest value. "What do I already own for method X", "what is my liquid worth at Hardcore GE prices (#58)", "what should I sell or keep" all need it. Value depends on freshness: report `exported_at` and that it reflects the last bank open.
-- **Equipment**: high value for survival-first advice (is the account under-geared for a target, what upgrade is realistic). Small and changes less often than the inventory.
-- **Inventory**: low value. It is the most volatile file, the one most affected by dropped throttled writes, and rarely changes advice outside an active session. It costs almost nothing to include in the shared parser; exposing it through MCP should wait for a concrete workflow.
+These are useful as standalone, read-only MCP data. They do not need to wait for structured Wiki data: the model can reason over holdings, gear and active-quest state directly, and Hardcore GE prices (#58) can be joined by item ID where a price exists.
+
+- **Bank**: highest value. "What do I already own for method X", "what is my holdings worth at Hardcore GE prices", "what should I sell or keep". Report `exported_at` and that it reflects the last bank open.
+- **Equipment**: high value for survival-first advice (is the account under-geared for a target, what upgrade is realistic). Small, and changes less often than the inventory.
+- **Inventory**: valuable during active questing (what is carried, what is missing for the next step), with the caveat that it is the most volatile file and the one most affected by dropped throttled writes. Expose it with its own `exported_at`, and with the same freshness wording as the other files.
+- **No combined snapshot.** The three files are written independently, so any tool presenting more than one must give each its own timestamp and must not claim an atomic or consistent snapshot (see "Per-file timestamps and freshness").
 - **Seed vault**: not useful yet; excluded.
+
+Tool priority, when exposure is designed: bank, equipment and quests first, then inventory, each as its own read-only tool or clearly separated section.
 
 ## `quests.json`
 
@@ -187,7 +192,7 @@ QuestProgress        { exported_at, plugin_version, quests: Vec<{ runelite_id: u
 
 ### Advisory usefulness
 
-High and cheap: eligibility and ordering of quests is core progression advice, and a quest list is small. Its value depends on the structured quest-requirements dataset (not yet built) and a RuneLite-ID-to-Wiki mapping, so the quest parser is worth landing before a quest-advice tool but need not be exposed through MCP until that mapping exists.
+High and cheap: which quests are finished or in progress is core progression advice and the list is small. Quest progress is useful as a standalone read-only MCP tool without waiting for structured requirement data; the model can combine it with Wiki knowledge. Requirement-aware advice ("which quests can I start now") later needs the structured quest dataset and an explicit RuneLite-ID-to-Wiki mapping, which are separate work. Prioritise it alongside the bank and equipment tools.
 
 ## `diaries.json`
 
@@ -223,7 +228,7 @@ Areas (fixed order): Ardougne, Desert, Falador, Fremennik, Kandarin, Karamja, `K
 
 ### Verified from source
 
-- `complete` and `tasks_done` come from varbits and are always written. They are authoritative for tier completion.
+- `complete` and `tasks_done` come from varbits and are always written. They are **observations** of two separate varbits per tier. This document does not claim they agree with each other or with the in-game journal: the reviewer of this PR reports inconsistencies between these fields in authentic samples that this author has not seen (see "Uncertainties").
 - `tasks` is present for Karamja easy, medium and hard (hard-coded names and per-task varbits, `complete > 0`) and elsewhere **only** when `diaryWidgetCache` holds scraped journal text. That cache is filled when the journal widget loads and is **cleared on logout and not restored from disk**, unlike the collection log. A later write in a session where the journal was not opened therefore **removes** `tasks`. Named-task data is opportunistic, free text from the game, and should not be parsed.
 - Karamja elite has no per-task list.
 - Because totals are absent, "x of y done" requires a per-tier task total from structured Wiki data. `complete == true` should imply `tasks_done` equals that total.
@@ -232,17 +237,18 @@ Areas (fixed order): Ardougne, Desert, Falador, Fremennik, Kandarin, Karamja, `K
 
 ```text
 DiaryTier        Easy | Medium | Hard | Elite
-DiaryProgress    { exported_at, plugin_version, areas: Map<AreaName(String), Map<DiaryTier, { complete: bool, tasks_done: u16 }>> }
+DiaryProgress    { exported_at, plugin_version, areas: Map<AreaName(String), Map<DiaryTier, { complete: bool, tasks_done: u16, tasks: Option<Vec<{ name: BoundedText, complete: bool }>> }>>, warnings }
 ```
 
 - Area names kept as strings (new regions would otherwise break the import); unknown tier key → warning and skipped, not an error.
-- **Ignore `tasks` entirely** in the first parser. If named tasks become valuable they are a separate, explicitly optional field.
-- `complete` false with `tasks_done` greater than a known total, or `complete` true with a known smaller total, is a warning once structured totals exist; not applicable in the parser.
+- Treat `complete`, `tasks_done` and `tasks` as independent observations, not verified authoritative progression. The parser **warns rather than silently reconciling** when they disagree (for example `complete` is true while a listed task is incomplete, or `tasks_done` differs from the number of completed tasks in a present `tasks` list). It never overrides one field with another.
+- Keep `tasks`, when present, as optional data: `{name, complete}` with a bounded, untrusted `name`. The names are **not parsed into requirements** or matched to the Wiki. Their presence is unreliable (see above), so absence means "not observed this session", never "none".
+- With known per-tier task totals from structured data, a warning for `complete` true with a smaller `tasks_done`, or `tasks_done` above the total, is a later consumer concern, not the parser's.
 - Absent area or tier is unknown, not incomplete.
 
 ### Advisory usefulness
 
-Medium: diaries gate real rewards and are a common progression goal, but advice needs task totals and requirements from the Wiki dataset first. Land after quests.
+Medium: diaries gate real rewards and are a common progression goal. Because the fields can disagree, any exposure must label them as observations and surface the parser's warnings. Land after quests; the "x of y" presentation needs per-tier task totals from structured data.
 
 ## `combat_achievements.json` (identified for later)
 
@@ -272,12 +278,12 @@ All after #31 merges (parsers should reuse its conventions) and independent of #
 | --- | --- | --- | --- |
 | A | Parse `bank.json`, `inventory.json`, `equipment.json` into `ContainerSnapshot` | One pure parser, shared DTO, typed errors and warnings, original synthetic fixtures for each kind, absent/empty cases, duplicate-ID and slot-uniqueness tests. No file I/O, no MCP | #31 |
 | B | Parse `quests.json` into `QuestProgress` | Pure parser as above; unknown-state and zero-progress behaviour tested | #31 (A not required) |
-| C | Parse `diaries.json` into `DiaryProgress` | Pure parser; `tasks` ignored; absent versus empty tested | #31 |
+| C | Parse `diaries.json` into `DiaryProgress` | Pure parser; fields kept as observations with warnings on disagreement; optional `tasks` kept as data, not interpreted; absent versus empty tested | #31 |
 | D | Read additional export files through the configured directory | Extends #60's bounded reader with more fixed filenames; no path input from callers | #60, plus A/B/C as wanted |
-| E (later) | MCP exposure for bank/equipment (holdings, valuation inputs) and for quest status | Only with an agreed schema and a dataset to combine with (prices for bank, quest requirements for quests) | D plus the relevant structured data |
+| E | Read-only MCP tools for bank, equipment and quest status, then inventory | Each with an agreed schema, its own per-file `exported_at` and no combined-snapshot claim. Does not wait for structured Wiki data; the bank can join Hardcore GE prices by item ID where a price exists | D, A/B, and #63 tool registration |
 | F (deferred) | Combat achievements and collection log | Only once reward and task datasets exist | — |
 
-A, B and C are independently reviewable and may be parallelised; A is the largest only in fixture count, not in logic. Splitting equipment slot naming from A is an option if review feels heavy.
+A, B and C keep all three container types in one parser. They are independently reviewable and may be parallelised; A is the largest only in fixture count, not in logic. Splitting equipment slot naming from A is an option if review feels heavy.
 
 ## Uncertainties
 
@@ -290,6 +296,8 @@ Facts that this document could **not** establish from source alone:
 5. How noted, placeholder or variant items appear in the real bank, beyond what `canonicalize` does by source reading.
 6. Behaviour for other plugin versions, other account types and a dead Hardcore account, and whether character-exporter data changes for a dead account.
 7. Equipment slots above 13 or other quirks in newer clients.
+8. **Diary field consistency.** A reviewer who has seen authentic user-provided samples reports inconsistencies between the diary tier flags, the `tasks_done` counts and the optional named tasks. This author has not seen those samples and has not read any authentic export for this document, so the nature and frequency of the inconsistencies is unknown. It needs a local investigation with the maintainer's permission, reporting counts only (for example how many tiers have `complete` true with `tasks_done` below the tier's known total). The upstream source reading explains one mechanism, the session-only `tasks` cache, but not necessarily the observed differences.
+9. Full upstream validation. The pinned source was read for this document, but this PR has not been independently re-verified against every code path, and no authentic check was run.
 
 ## Required local verification (opt-in, counts only)
 
