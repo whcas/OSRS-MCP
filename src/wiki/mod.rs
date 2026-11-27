@@ -17,6 +17,7 @@
 mod export;
 mod model;
 mod sections;
+mod store;
 mod timestamp;
 
 pub use export::{
@@ -27,5 +28,9 @@ pub use model::{ExportedHash, ImportedPage, PageId, PageTitle, RevisionId, Sourc
 pub use sections::{
     Chunk, ChunkKind, InvalidLimits, Loss, PrepareError, PrepareLimits, PreparedPage, Section,
     SectionId, SectionPath, prepare,
+};
+pub use store::{
+    ImportSession, ImportSummary, Operation, PageOutcome, Store, StoreError, StoredChunk,
+    StoredPage,
 };
 pub use timestamp::{InvalidTimestamp, RevisionTimestamp};
