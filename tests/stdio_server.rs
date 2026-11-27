@@ -165,7 +165,12 @@ fn serves_server_info_over_stdio_with_a_clean_stdout() {
     server.send(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
     let tools = server.receive();
     assert_eq!(tools["id"], 2);
-    assert_eq!(tools["result"]["tools"][0]["name"], "server_info");
+    assert!(
+        tools["result"]["tools"]
+            .as_array()
+            .is_some_and(|list| list.iter().any(|tool| tool["name"] == "server_info")),
+        "server_info should be listed: {tools}"
+    );
 
     server.send(&json!({
         "jsonrpc": "2.0",
@@ -227,7 +232,12 @@ fn malformed_input_is_skipped_without_polluting_stdout() {
     server.send(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
     let tools = server.receive();
     assert_eq!(tools["id"], 2, "server should keep serving: {tools}");
-    assert_eq!(tools["result"]["tools"][0]["name"], "server_info");
+    assert!(
+        tools["result"]["tools"]
+            .as_array()
+            .is_some_and(|list| list.iter().any(|tool| tool["name"] == "server_info")),
+        "server_info should be listed: {tools}"
+    );
 
     let (status, leftover, stderr) = server.close_and_wait();
     assert!(

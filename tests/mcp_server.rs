@@ -48,21 +48,27 @@ async fn initialization_reports_server_identity_and_tools_capability() {
 }
 
 #[tokio::test]
-async fn tool_discovery_lists_only_the_read_only_server_info_tool() {
+async fn tool_discovery_lists_only_read_only_tools_with_typed_outputs() {
     let (client, _server) = connect().await;
 
     let tools = client.list_all_tools().await.expect("tools/list");
 
-    assert_eq!(tools.len(), 1, "tools: {tools:?}");
-    let tool = &tools[0];
-    assert_eq!(tool.name, "server_info");
-    assert!(tool.description.is_some(), "tools need descriptions");
-    let annotations = tool.annotations.as_ref().expect("annotations");
-    assert_eq!(annotations.read_only_hint, Some(true));
-    assert_eq!(annotations.destructive_hint, Some(false));
-    assert_eq!(annotations.idempotent_hint, Some(true));
-    assert_eq!(annotations.open_world_hint, Some(false));
-    assert!(tool.output_schema.is_some(), "typed output schema");
+    let mut names: Vec<&str> = tools.iter().map(|tool| &*tool.name).collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        ["character_summary", "server_info"],
+        "tools: {tools:?}"
+    );
+    for tool in &tools {
+        assert!(tool.description.is_some(), "tools need descriptions");
+        let annotations = tool.annotations.as_ref().expect("annotations");
+        assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
+        assert_eq!(annotations.destructive_hint, Some(false), "{}", tool.name);
+        assert_eq!(annotations.idempotent_hint, Some(true), "{}", tool.name);
+        assert_eq!(annotations.open_world_hint, Some(false), "{}", tool.name);
+        assert!(tool.output_schema.is_some(), "typed output schema");
+    }
 }
 
 #[tokio::test]

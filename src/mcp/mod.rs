@@ -8,6 +8,7 @@
 //! [`OsrsMcpServer::new`] combines them. Adding a family is one module plus one
 //! `+` in `new`, which keeps unrelated tool changes from conflicting.
 
+mod character;
 mod info;
 
 use rmcp::{
@@ -20,7 +21,12 @@ use rmcp::{
 };
 
 use crate::build_info;
+use crate::runelite::LocalExportSource;
 
+pub use character::{
+    CharacterSummary, CharacterSummaryFailure, ExportedAtOutput, FailureStatus, SkillOutput,
+    SummaryStatus, UnreadableReason, WarningOutput,
+};
 pub use info::ServerInfoOutput;
 
 /// Instructions shown to clients that surface server guidance.
@@ -32,6 +38,7 @@ capabilities.";
 #[derive(Debug, Clone)]
 pub struct OsrsMcpServer {
     tool_router: ToolRouter<Self>,
+    export_source: LocalExportSource,
 }
 
 impl Default for OsrsMcpServer {
@@ -41,12 +48,21 @@ impl Default for OsrsMcpServer {
 }
 
 impl OsrsMcpServer {
-    /// Creates a server with all tools registered.
+    /// Creates a server with all tools registered and no `RuneLite` export
+    /// directory configured; see [`with_export_source`](Self::with_export_source).
     #[must_use]
     pub fn new() -> Self {
         Self {
-            tool_router: Self::info_router(),
+            tool_router: Self::info_router() + Self::character_router(),
+            export_source: LocalExportSource::unconfigured(),
         }
+    }
+
+    /// Sets where account tools read the local `RuneLite` export from.
+    #[must_use]
+    pub fn with_export_source(mut self, source: LocalExportSource) -> Self {
+        self.export_source = source;
+        self
     }
 }
 
@@ -84,7 +100,8 @@ impl ServerHandler for OsrsMcpServer {
 /// Returns an error if the MCP handshake fails or the connection ends abnormally.
 pub async fn serve_stdio() -> Result<(), ServeError> {
     let transport = rmcp::transport::stdio();
-    serve(OsrsMcpServer::new(), transport).await
+    let server = OsrsMcpServer::new().with_export_source(LocalExportSource::from_env());
+    serve(server, transport).await
 }
 
 /// A boxed underlying error, kept so callers can walk the source chain.

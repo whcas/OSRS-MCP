@@ -70,6 +70,7 @@ The `sleep` keeps stdin open long enough for the server to answer before it sees
 | Tool | Description |
 | --- | --- |
 | `server_info` | Read-only. Returns the server name, version, read-only guarantee and MCP capabilities. Uses no external data. |
+| `character_summary` | Read-only. Skill levels and experience from the local RuneLite Character Exporter file, with the exporter timestamp and import warnings. Needs `OSRS_MCP_RUNELITE_EXPORT_DIR`; see [docs/local-exports.md](docs/local-exports.md). |
 
 ## Development
 
