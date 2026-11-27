@@ -1,0 +1,1 @@
+[{"examine":"Synthetic example item.","id":2,"members":false,"lowalch":4,"limit":11000,"value":7,"highalch":6,"icon":"Example.png","name":"Example ammo"},{"examine":"Synthetic example with optional fields absent.","id":4151,"members":true,"icon":"Example_two.png","name":"Example weapon"}]
