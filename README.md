@@ -32,6 +32,18 @@ Early development. A minimal read-only MCP server (`osrs-mcp serve`, stdio trans
 
 Read [AGENTS.md](AGENTS.md) for engineering conventions. Use a scoped [GitHub issue](https://github.com/whcas/OSRS-MCP/issues), a short-lived branch and a pull request into `main`. Human review and passing applicable checks are expected before merging. Record significant architectural decisions under [docs/adr](docs/adr/).
 
+## Local Wiki commands
+
+Offline commands work on a database built from manual `Special:Export` XML files; nothing is downloaded. Choose the database path with `--db` or `OSRS_MCP_WIKI_DB` (use an ignored location such as `data/`).
+
+```sh
+osrs-mcp wiki import exports/pages.xml --db data/wiki.sqlite   # whole file or nothing; repeat imports change nothing
+osrs-mcp wiki search fairy ring --limit 5 --db data/wiki.sqlite  # every word must match
+osrs-mcp wiki page "Dragon axe" --db data/wiki.sqlite            # follows redirects
+```
+
+`search` and `page` open the database read-only and never create, initialise or upgrade it. See [ADR-0005](docs/adr/0005-wiki-command-line.md) and [ADR-0004](docs/adr/0004-wiki-store-sqlite.md).
+
 ## Running the MCP server
 
 Build the binary (the pinned toolchain is installed by rustup automatically):

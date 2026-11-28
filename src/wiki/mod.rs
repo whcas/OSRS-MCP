@@ -14,6 +14,7 @@
 //!
 //! Wiki types stay independent of MCP, storage and the CLI.
 
+pub mod commands;
 mod export;
 mod model;
 mod sections;

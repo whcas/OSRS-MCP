@@ -8,6 +8,10 @@ repository = "https://github.com/whcas/OSRS-MCP"
 publish = false
 
 [dependencies]
+# Command-line parsing (derive), approved for the first subcommand beyond `serve`.
+# Default features are off: help, usage text, error context and the environment
+# fallback for the database path are enabled individually.
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "env"] }
 # Date and time. Only `Timestamp` parsing and formatting are used, so default
 # features (time zone database, system zone lookup, logging) are off.
 jiff = { version = "0.2", default-features = false, features = ["std"] }
