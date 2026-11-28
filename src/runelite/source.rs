@@ -122,10 +122,11 @@ impl LocalExportSource {
     /// be read within [`MAX_CHARACTER_EXPORT_BYTES`], or its content is not a
     /// valid export.
     pub fn read_character(&self) -> Result<CharacterExport, ExportReadError> {
-        let bytes = self.read_file(CHARACTER_FILE_NAME, MAX_CHARACTER_EXPORT_BYTES)?;
-        parse_character_export(&bytes)
-            .map_err(ParseFailure::from)
-            .map_err(ExportReadError::Parse)
+        self.read_parsed(
+            CHARACTER_FILE_NAME,
+            MAX_CHARACTER_EXPORT_BYTES,
+            parse_character_export,
+        )
     }
 
     /// Reads and parses the bank, inventory or equipment file.
@@ -148,10 +149,9 @@ impl LocalExportSource {
         &self,
         kind: ContainerKind,
     ) -> Result<ContainerSnapshot, ExportReadError> {
-        let bytes = self.read_file(container_file_name(kind), container_limit())?;
-        parse_container_export(kind, &bytes)
-            .map_err(ParseFailure::from)
-            .map_err(ExportReadError::Parse)
+        self.read_parsed(container_file_name(kind), container_limit(), |bytes| {
+            parse_container_export(kind, bytes)
+        })
     }
 
     /// Reads and parses `quests.json`.
@@ -167,10 +167,22 @@ impl LocalExportSource {
     /// Returns [`ExportReadError`] if nothing is configured, the file cannot
     /// be read within the limit, or its content is not a valid export.
     pub fn read_quests(&self) -> Result<QuestProgress, ExportReadError> {
-        let bytes = self.read_file(QUEST_FILE_NAME, quest_limit())?;
-        parse_quest_export(&bytes)
-            .map_err(ParseFailure::from)
-            .map_err(ExportReadError::Parse)
+        self.read_parsed(QUEST_FILE_NAME, quest_limit(), parse_quest_export)
+    }
+
+    /// Reads `file_name` within `limit` bytes and parses it, so that every
+    /// dataset reports read and parse failures the same way.
+    fn read_parsed<T, E>(
+        &self,
+        file_name: &str,
+        limit: u64,
+        parse: impl FnOnce(&[u8]) -> Result<T, E>,
+    ) -> Result<T, ExportReadError>
+    where
+        ParseFailure: From<E>,
+    {
+        let bytes = self.read_file(file_name, limit)?;
+        parse(&bytes).map_err(|error| ExportReadError::Parse(ParseFailure::from(error)))
     }
 
     fn read_file(&self, file_name: &str, limit: u64) -> Result<Vec<u8>, ExportReadError> {

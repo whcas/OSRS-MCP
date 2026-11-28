@@ -2,64 +2,25 @@
 //! the server over an in-memory pipe, reading original synthetic exports from
 //! temporary directories. No private export, process or network is involved.
 
-use std::fs;
+mod common;
 
-use osrs_mcp::mcp::OsrsMcpServer;
+use common::{Client, connect, failure_json, source_in};
 use osrs_mcp::runelite::{CHARACTER_FILE_NAME, LocalExportSource};
-use rmcp::{
-    ServiceExt,
-    model::{CallToolRequestParams, CallToolResult},
-    service::{RoleClient, RunningService},
-};
-use serde_json::Value;
+use rmcp::model::{CallToolRequestParams, CallToolResult};
 use tempfile::TempDir;
-use tokio::task::JoinHandle;
 
 const SYNTHETIC_EXPORT: &[u8] = include_bytes!("fixtures/runelite_export/character.synthetic.json");
 
-async fn connect(source: LocalExportSource) -> (RunningService<RoleClient, ()>, JoinHandle<()>) {
-    let (client_io, server_io) = tokio::io::duplex(65536);
-    let server = tokio::spawn(async move {
-        let running = OsrsMcpServer::new()
-            .expect("server should be configured")
-            .with_export_source(source)
-            .serve(server_io)
-            .await
-            .expect("server should initialise");
-        running.waiting().await.expect("clean shutdown");
-    });
-    let client = ().serve(client_io).await.expect("client should initialise");
-    (client, server)
+/// A directory holding `content` as `character.json`, with a source reading it.
+fn source_with(content: &[u8]) -> (TempDir, LocalExportSource) {
+    source_in("osrs-mcp-summary-", CHARACTER_FILE_NAME, content)
 }
 
-async fn call(client: &RunningService<RoleClient, ()>) -> CallToolResult {
+async fn call(client: &Client) -> CallToolResult {
     client
         .call_tool(CallToolRequestParams::new("character_summary"))
         .await
         .expect("character_summary should be callable")
-}
-
-/// A directory holding `content` as `character.json`, with a source reading it.
-fn source_with(content: &[u8]) -> (TempDir, LocalExportSource) {
-    let dir = TempDir::with_prefix("osrs-mcp-summary-").unwrap();
-    fs::write(dir.path().join(CHARACTER_FILE_NAME), content).unwrap();
-    let source = LocalExportSource::new(dir.path().to_path_buf());
-    (dir, source)
-}
-
-/// The error text of a failed call, parsed as JSON.
-fn failure_json(result: &CallToolResult) -> Value {
-    assert_eq!(result.is_error, Some(true), "result: {result:?}");
-    assert!(
-        result.structured_content.is_none(),
-        "failures must not carry structured content"
-    );
-    let text = result.content[0]
-        .as_text()
-        .expect("failure text")
-        .text
-        .clone();
-    serde_json::from_str(&text).expect("failure text is JSON")
 }
 
 #[tokio::test]
