@@ -150,34 +150,17 @@ type Cause = Box<dyn std::error::Error + Send + Sync>;
 
 /// Failure while running the MCP server. The underlying cause is available
 /// through [`std::error::Error::source`].
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ServeError {
     /// The server could not be configured, so it never started.
-    Configuration(Cause),
+    #[error("MCP server could not be configured")]
+    Configuration(#[source] Cause),
     /// The MCP initialization handshake failed.
-    Initialize(Cause),
+    #[error("MCP initialization failed")]
+    Initialize(#[source] Cause),
     /// The connection ended abnormally after initialization.
-    Connection(Cause),
-}
-
-impl std::fmt::Display for ServeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Configuration(_) => "MCP server could not be configured",
-            Self::Initialize(_) => "MCP initialization failed",
-            Self::Connection(_) => "MCP connection failed",
-        })
-    }
-}
-
-impl std::error::Error for ServeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Configuration(cause) | Self::Initialize(cause) | Self::Connection(cause) => {
-                Some(cause.as_ref())
-            }
-        }
-    }
+    #[error("MCP connection failed")]
+    Connection(#[source] Cause),
 }
 
 async fn serve<T, E, A>(server: OsrsMcpServer, transport: T) -> Result<(), ServeError>
