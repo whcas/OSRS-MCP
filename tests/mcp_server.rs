@@ -59,9 +59,13 @@ async fn tool_discovery_lists_only_described_read_only_tools_including_server_in
     assert_eq!(
         names,
         [
+            "bank_contents",
+            "calculate_profit",
             "character_summary",
+            "equipment_contents",
             "item_prices",
             "item_search",
+            "quest_status",
             "server_info"
         ],
         "tools: {tools:?}"

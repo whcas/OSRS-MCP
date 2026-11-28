@@ -19,6 +19,7 @@ mod export;
 mod model;
 pub mod queue;
 mod sections;
+mod store;
 mod timestamp;
 
 pub use export::{
@@ -29,5 +30,10 @@ pub use model::{ExportedHash, ImportedPage, PageId, PageTitle, RevisionId, Sourc
 pub use sections::{
     Chunk, ChunkKind, InvalidLimits, Loss, PrepareError, PrepareLimits, PreparedPage, Section,
     SectionId, SectionPath, prepare,
+};
+pub use store::{
+    ImportSession, ImportSummary, InvalidSearch, MAX_QUERY_BYTES, MAX_QUERY_TERMS, MAX_RESULTS,
+    Operation, PageOutcome, Resolution, SearchHit, SearchQuery, Store, StoreError, StoredChunk,
+    StoredPage, TitleMatch,
 };
 pub use timestamp::{InvalidTimestamp, RevisionTimestamp};
