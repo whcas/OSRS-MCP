@@ -42,7 +42,7 @@ osrs-mcp wiki search fairy ring --limit 5 --db data/wiki.sqlite  # every word mu
 osrs-mcp wiki page "Dragon axe" --db data/wiki.sqlite            # follows redirects
 ```
 
-`search` and `page` never create a database. See [ADR-0005](docs/adr/0005-wiki-command-line.md) and [ADR-0004](docs/adr/0004-wiki-store-sqlite.md).
+`search` and `page` open the database read-only and never create, initialise or upgrade it. See [ADR-0005](docs/adr/0005-wiki-command-line.md) and [ADR-0004](docs/adr/0004-wiki-store-sqlite.md).
 
 ## Running the MCP server
 

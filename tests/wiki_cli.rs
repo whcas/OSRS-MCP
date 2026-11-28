@@ -318,3 +318,35 @@ fn missing_or_invalid_arguments_are_usage_errors_on_stderr_only() {
         assert!(!run.stderr.is_empty(), "{args:?}");
     }
 }
+
+#[test]
+fn querying_an_existing_empty_file_fails_and_leaves_it_unchanged() {
+    let workspace = Workspace::new();
+    fs::write(workspace.database(), b"").expect("write file");
+    for args in [["wiki", "search", "trees"], ["wiki", "page", "Axe"]] {
+        let run = workspace.run_with_db(&args);
+        assert_eq!(run.code, Some(1), "{args:?}: {}", run.stderr);
+        assert_eq!(run.stdout, "", "{args:?}");
+        assert!(
+            run.stderr.contains("not the current version"),
+            "{}",
+            run.stderr
+        );
+        assert_eq!(
+            fs::metadata(workspace.database())
+                .expect("file remains")
+                .len(),
+            0,
+            "{args:?} must not initialise the file"
+        );
+    }
+    let entries: Vec<_> = fs::read_dir(workspace.directory.path())
+        .expect("list directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(
+        entries,
+        ["wiki.sqlite"],
+        "no journal or other file appeared"
+    );
+}

@@ -46,7 +46,9 @@ mod search;
 use std::ops::Range;
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 
 use super::{
     ChunkKind, ExportedHash, ImportedPage, Loss, PageId, PageTitle, PrepareLimits, PreparedPage,
@@ -90,6 +92,25 @@ impl Store {
             .pragma_update(None, "foreign_keys", true)
             .map_err(StoreError::database(Operation::Configure))?;
         schema::migrate(&mut connection)?;
+        Ok(Self { connection })
+    }
+
+    /// Opens an existing database for reading only.
+    ///
+    /// Unlike [`Self::open`] this never creates the file, never migrates it and
+    /// never writes: an empty or outdated file is refused and left as it was.
+    /// The connection is read-only, so [`Self::begin_import`] on the result
+    /// fails with a database error.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the file cannot be opened, is not at the current schema
+    /// version (see [`StoreError::NotCurrentSchema`]), was written by a newer
+    /// version of this program, or lacks the store's tables.
+    pub fn open_existing(path: &Path) -> Result<Self, StoreError> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(StoreError::database(Operation::Open))?;
+        schema::validate(&connection)?;
         Ok(Self { connection })
     }
 
@@ -824,6 +845,95 @@ mod tests {
 
     pub(super) fn page_id(id: u64) -> PageId {
         PageId::new(id).unwrap()
+    }
+
+    #[test]
+    fn open_existing_reads_a_current_database_and_refuses_to_import_into_it() {
+        let fixture = Fixture::new();
+        import(&mut fixture.open(), &fixture.source, &[page(1, 1, "Text.")]);
+        let mut store = Store::open_existing(&fixture.path()).unwrap();
+        assert_eq!(revision_of(&store, &fixture.source, 1), Some(1));
+        assert!(matches!(
+            store.begin_import(&fixture.source, PrepareLimits::default()),
+            Err(StoreError::Database {
+                operation: Operation::Write,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn open_existing_refuses_an_empty_file_and_leaves_it_empty() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        std::fs::write(&path, b"").unwrap();
+        assert!(matches!(
+            Store::open_existing(&path),
+            Err(StoreError::NotCurrentSchema {
+                found: 0,
+                required: 3
+            })
+        ));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn open_existing_refuses_an_outdated_database_without_upgrading_it() {
+        let fixture = Fixture::new();
+        drop(fixture.open());
+        let path = fixture.path();
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", 2)
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(matches!(
+            Store::open_existing(&path),
+            Err(StoreError::NotCurrentSchema {
+                found: 2,
+                required: 3
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn open_existing_refuses_a_newer_database() {
+        let fixture = Fixture::new();
+        drop(fixture.open());
+        Connection::open(fixture.path())
+            .unwrap()
+            .pragma_update(None, "user_version", 4)
+            .unwrap();
+        assert!(matches!(
+            Store::open_existing(&fixture.path()),
+            Err(StoreError::UnsupportedSchema { found: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn open_existing_refuses_a_database_without_the_stores_tables() {
+        let fixture = Fixture::new();
+        let connection = Connection::open(fixture.path()).unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
+        drop(connection);
+        assert!(matches!(
+            Store::open_existing(&fixture.path()),
+            Err(StoreError::Corrupt { what: "schema" })
+        ));
+    }
+
+    #[test]
+    fn open_existing_does_not_create_a_missing_file() {
+        let fixture = Fixture::new();
+        assert!(matches!(
+            Store::open_existing(&fixture.path()),
+            Err(StoreError::Database {
+                operation: Operation::Open,
+                ..
+            })
+        ));
+        assert!(!fixture.path().exists());
     }
 
     fn revision_of(store: &Store, source: &SourceId, id: u64) -> Option<u64> {

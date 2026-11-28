@@ -207,7 +207,7 @@ fn open_corpus(corpus: &Corpus) -> Result<(Store, SourceId), CommandError> {
     if !Path::new(&corpus.database).is_file() {
         return Err(CommandError::DatabaseMissing);
     }
-    let store = Store::open(&corpus.database)?;
+    let store = Store::open_existing(&corpus.database)?;
     let source = choose_source(store.sources()?, corpus.site.as_deref())?;
     Ok((store, source))
 }
@@ -436,6 +436,25 @@ mod tests {
             Err(CommandError::DatabaseMissing)
         ));
         assert!(!workspace.database().exists());
+    }
+
+    #[test]
+    fn reading_an_existing_file_that_is_not_a_wiki_database_fails_and_leaves_it_alone() {
+        let workspace = Workspace::new();
+        fs::write(workspace.database(), b"").unwrap();
+        for result in [
+            workspace.search(words("trees")).map(|_| ()),
+            workspace.page("Axe").map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(CommandError::Store(StoreError::NotCurrentSchema {
+                    found: 0,
+                    ..
+                }))
+            ));
+        }
+        assert_eq!(fs::metadata(workspace.database()).unwrap().len(), 0);
     }
 
     #[test]

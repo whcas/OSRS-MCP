@@ -167,6 +167,47 @@ const MIGRATIONS: [Migration; 3] = [
 /// The newest schema version this build understands: the number of migrations.
 pub(super) const LATEST: i64 = 3;
 
+/// Tables a store at [`LATEST`] must have; `chunk_fts` is the search index.
+const REQUIRED_TABLES: [&str; 4] = ["source", "page", "chunk", "chunk_fts"];
+
+/// Checks that an existing database is at [`LATEST`] and has the store's
+/// tables, without changing it.
+///
+/// # Errors
+///
+/// Fails if the version is newer or older than [`LATEST`] (version 0 is a file
+/// that was never initialised), if a table is missing, or on a database error.
+pub(super) fn validate(connection: &Connection) -> Result<(), StoreError> {
+    let found: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(StoreError::database(Operation::Read))?;
+    if found > LATEST {
+        return Err(StoreError::UnsupportedSchema {
+            found,
+            supported: LATEST,
+        });
+    }
+    if found < LATEST {
+        return Err(StoreError::NotCurrentSchema {
+            found,
+            required: LATEST,
+        });
+    }
+    for table in REQUIRED_TABLES {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::database(Operation::Read))?;
+        if !exists {
+            return Err(StoreError::Corrupt { what: "schema" });
+        }
+    }
+    Ok(())
+}
+
 /// Brings the database to [`LATEST`], creating it if it is new.
 ///
 /// # Errors

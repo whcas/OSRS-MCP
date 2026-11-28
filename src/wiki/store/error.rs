@@ -59,6 +59,19 @@ pub enum StoreError {
         /// The newest version this build understands.
         supported: i64,
     },
+    /// A read-only open found a database that is not at the current schema
+    /// version. Reading never upgrades a database; importing does. Version 0 is
+    /// a file that was never initialised.
+    #[error(
+        "database schema version {found} is not the current version {required}; \
+         only an import upgrades a database"
+    )]
+    NotCurrentSchema {
+        /// The version recorded in the file.
+        found: i64,
+        /// The version this build reads.
+        required: i64,
+    },
     /// A page's text could not be prepared for storage.
     #[error("page {page} could not be prepared")]
     Prepare {
