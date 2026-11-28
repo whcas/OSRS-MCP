@@ -5,7 +5,9 @@
 use std::fs;
 
 use osrs_mcp::mcp::OsrsMcpServer;
-use osrs_mcp::runelite::{BANK_FILE_NAME, EQUIPMENT_FILE_NAME, LocalExportSource};
+use osrs_mcp::runelite::{
+    BANK_FILE_NAME, EQUIPMENT_FILE_NAME, INVENTORY_FILE_NAME, LocalExportSource,
+};
 use rmcp::{
     ServiceExt,
     model::{CallToolRequestParams, CallToolResult},
@@ -431,4 +433,108 @@ async fn a_file_holding_another_container_kind_is_an_invalid_export() {
 
     assert_eq!(failure["status"], "invalid_export");
     assert_eq!(failure["retryable"], false);
+}
+
+/// An inventory export of `count` rows, one item per slot.
+fn inventory_json(count: usize) -> String {
+    let rows: Vec<String> = (0..count)
+        .map(|slot| format!(r#"{{"slot":{slot},"id":{},"quantity":1}}"#, 100 + slot))
+        .collect();
+    format!(
+        r#"{{"exported_at":"2026-01-01T12:00:00Z","kind":"inventory","item_count":{count},"items":[{}]}}"#,
+        rows.join(",")
+    )
+}
+
+#[tokio::test]
+async fn inventory_contents_is_listed_read_only_with_no_inputs() {
+    let (client, _server) = connect(LocalExportSource::unconfigured()).await;
+
+    let tools = client.list_all_tools().await.expect("tools/list");
+
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name == "inventory_contents")
+        .expect("inventory_contents is listed");
+    let annotations = tool.annotations.as_ref().expect("annotations");
+    assert_eq!(annotations.read_only_hint, Some(true));
+    assert_eq!(annotations.destructive_hint, Some(false));
+    assert_eq!(annotations.idempotent_hint, Some(true));
+    assert_eq!(annotations.open_world_hint, Some(false));
+    assert!(tool.output_schema.is_some(), "typed output");
+    let input = Value::Object((*tool.input_schema).clone());
+    assert!(
+        input.get("properties").is_none_or(|properties| properties
+            .as_object()
+            .is_some_and(serde_json::Map::is_empty)),
+        "no inputs: {input}"
+    );
+}
+
+#[tokio::test]
+async fn a_populated_inventory_is_returned_in_file_order() {
+    let (_dir, source) = source_with(INVENTORY_FILE_NAME, &inventory_json(3));
+    let (client, _server) = connect(source).await;
+
+    let result = call(&client, "inventory_contents", json!({})).await;
+
+    let inventory = result.structured_content.expect("structured content");
+    assert_eq!(inventory["status"], "ok");
+    assert_eq!(inventory["container"], "inventory");
+    assert_eq!(inventory["total_rows"], 3);
+    assert_eq!(inventory["truncated"], false);
+    assert_eq!(inventory["rows"][2]["item_id"], 102);
+}
+
+#[tokio::test]
+async fn exactly_28_rows_are_returned_whole() {
+    let (_dir, source) = source_with(INVENTORY_FILE_NAME, &inventory_json(28));
+    let (client, _server) = connect(source).await;
+
+    let result = call(&client, "inventory_contents", json!({})).await;
+
+    let inventory = result.structured_content.expect("structured content");
+    assert_eq!(inventory["rows"].as_array().map(Vec::len), Some(28));
+    assert_eq!(inventory["truncated"], false);
+}
+
+#[tokio::test]
+async fn a_29th_row_is_cut_and_the_truncation_is_explicit() {
+    let (_dir, source) = source_with(INVENTORY_FILE_NAME, &inventory_json(29));
+    let (client, _server) = connect(source).await;
+
+    let result = call(&client, "inventory_contents", json!({})).await;
+
+    let inventory = result.structured_content.expect("structured content");
+    assert_eq!(inventory["status"], "ok");
+    assert_eq!(inventory["rows"].as_array().map(Vec::len), Some(28));
+    assert_eq!(inventory["rows"][27]["slot"], 27);
+    assert_eq!(inventory["truncated"], true);
+    assert_eq!(inventory["total_rows"], 29);
+    assert_eq!(inventory["snapshot_rows"], 29);
+    assert_eq!(inventory["limit"], 28);
+}
+
+#[tokio::test]
+async fn an_empty_inventory_is_ok_and_a_missing_file_is_a_failure() {
+    let (_dir, source) = source_with(INVENTORY_FILE_NAME, &inventory_json(0));
+    let (client, _server) = connect(source).await;
+    let empty = call(&client, "inventory_contents", json!({})).await;
+    let empty = empty.structured_content.expect("structured content");
+    assert_eq!(
+        (empty["status"].as_str(), empty["total_rows"].as_u64()),
+        (Some("ok"), Some(0))
+    );
+
+    // A bank file in the directory is never read as the inventory.
+    let (_dir, source) = source_with(BANK_FILE_NAME, &bank_json(1));
+    let (client, _server) = connect(source).await;
+    let missing = failure_json(&call(&client, "inventory_contents", json!({})).await);
+    assert_eq!(missing["status"], "file_not_found");
+    assert!(
+        missing["message"]
+            .as_str()
+            .unwrap()
+            .contains("inventory.json")
+    );
 }

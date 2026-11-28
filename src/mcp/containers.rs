@@ -1,5 +1,5 @@
-//! The `bank_contents` and `equipment_contents` tools: item rows from the local
-//! Character Exporter files.
+//! The `bank_contents`, `equipment_contents` and `inventory_contents` tools:
+//! item rows from the local Character Exporter files.
 //!
 //! This module only adapts. Reading is [`LocalExportSource`](crate::runelite::LocalExportSource)
 //! and parsing is [`parse_container_export`](crate::runelite::parse_container_export);
@@ -30,6 +30,9 @@ use crate::runelite::{
 const DEFAULT_LIMIT: usize = 100;
 /// Most rows one call can return.
 const MAX_LIMIT: usize = 200;
+/// Slots in the game's inventory. The shared parser accepts far more rows than
+/// this, so the inventory tool bounds its own output.
+const INVENTORY_SLOTS: usize = 28;
 /// Most warnings returned.
 const MAX_WARNINGS: usize = 64;
 
@@ -280,6 +283,42 @@ impl OsrsMcpServer {
             item_ids: None,
         };
         self.container_result(ContainerKind::Equipment, query).await
+    }
+
+    /// Reports inventory rows from the local Character Exporter file.
+    #[tool(
+        name = "inventory_contents",
+        description = "Read the player's inventory from the local RuneLite Character Exporter \
+                       file configured for this server: item ids, quantities and optional \
+                       display names per slot, with the exporter timestamp and import \
+                       warnings. Reads the file on every call. At most 28 rows are returned, \
+                       the size of the game's inventory; if the file lists more, truncated is \
+                       true and total_rows and snapshot_rows give the full count. An observed \
+                       empty inventory file is a valid result with no rows; a missing file is \
+                       reported as file_not_found. The exporter throttles inventory writes and \
+                       does not reschedule a dropped one, so the file can be one change behind, \
+                       and the timestamp is the last change to the file, not the time of \
+                       reading. It does not show the current inventory and is not consistent \
+                       with any other export file. Does not price items or total their value. \
+                       Failures report a status such as not_configured or file_not_found.",
+        annotations(
+            title = "Inventory contents",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        output_schema = schema_for_output::<ContainerContents>()
+    )]
+    async fn inventory_contents(&self) -> Result<CallToolResult, ErrorData> {
+        let query = Query {
+            page: Page {
+                offset: 0,
+                limit: INVENTORY_SLOTS,
+            },
+            item_ids: None,
+        };
+        self.container_result(ContainerKind::Inventory, query).await
     }
 }
 
@@ -767,6 +806,56 @@ mod tests {
 
         assert!(
             failure.message.contains("equipment.json"),
+            "{}",
+            failure.message
+        );
+    }
+
+    #[test]
+    fn inventory_output_is_bounded_to_the_game_inventory_and_says_so() {
+        let snapshot = bank_with_rows(INVENTORY_SLOTS + 1);
+        let query = Query {
+            page: Page {
+                offset: 0,
+                limit: INVENTORY_SLOTS,
+            },
+            item_ids: None,
+        };
+
+        let result = contents(&snapshot, &query, ts("2026-01-01T12:00:00Z"));
+
+        assert_eq!(result.rows.len(), INVENTORY_SLOTS);
+        assert!(result.truncated);
+        assert_eq!(result.total_rows, INVENTORY_SLOTS + 1);
+        assert_eq!(result.snapshot_rows, INVENTORY_SLOTS + 1);
+    }
+
+    #[test]
+    fn exactly_a_full_inventory_is_not_truncated() {
+        let query = Query {
+            page: Page {
+                offset: 0,
+                limit: INVENTORY_SLOTS,
+            },
+            item_ids: None,
+        };
+
+        let result = contents(
+            &bank_with_rows(INVENTORY_SLOTS),
+            &query,
+            ts("2026-01-01T12:00:00Z"),
+        );
+
+        assert_eq!(result.rows.len(), INVENTORY_SLOTS);
+        assert!(!result.truncated);
+    }
+
+    #[test]
+    fn inventory_failures_name_the_inventory_file() {
+        let failure = container_failure(&ExportReadError::FileNotFound, ContainerKind::Inventory);
+
+        assert!(
+            failure.message.contains("inventory.json"),
             "{}",
             failure.message
         );
