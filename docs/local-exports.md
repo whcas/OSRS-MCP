@@ -98,3 +98,23 @@ Read-only. Reads `quests.json` on each call. Input (all optional): `state` (`fin
 - No account name, world, session id, path or raw JSON.
 
 Failures use the same fixed statuses as `character_summary`, with messages naming `quests.json`.
+
+## The `diary_status` tool
+
+Read-only. Reads `diaries.json` on each call. Input (all optional): `area` (exact area name, ignoring case), `tier` (`easy`, `medium`, `hard` or `elite`), `include_tasks` (default false; **allowed only together with `area`**), `offset` (matching areas to skip, default 0) and `limit` (1 to 64, default 25). There is no path or file input.
+
+For each recorded tier the exporter supplies three observations that are **independent and often disagree**, so they are reported side by side and never reconciled:
+
+- `flagged_complete`: the exporter's tier completion flag.
+- `tasks_done`: the exporter's count of done tasks.
+- `tasks_listed` and `tasks_listed_complete`: how many named tasks the file lists for the tier and how many of those carry a complete flag. Both are `null` when the file has no task list for the tier (unrecorded, not zero). The task names and flags (`tasks`) are returned only with `include_tasks`.
+
+None of these is an authoritative statement that a diary is complete. `warnings` name the disagreements the parser found, using the area name instead of a position: `task_count_mismatch`, `complete_with_incomplete_task`, `unknown_tier` (a tier name this server does not recognise is omitted) and `summary_mismatch` (the file's own summary contradicts its observations). Warnings never change the observations.
+
+- `counts` (`areas_recorded`, `tiers_recorded`, `tiers_flagged_complete`) cover the whole export and ignore filters and paging. `tiers_flagged_complete` counts flags the exporter wrote, not verified completion.
+- The `area` and `tier` filters apply before paging, in name order. A `tier` filter applies inside each area, and an area with no tier of that kind is omitted. `matched` counts areas after filtering and before paging; `truncated` says whether matching areas follow the page.
+- A missing area or tier is **unrecorded, not incomplete**. A missing `diaries.json` is `file_not_found`. A file with no areas is `ok` with `counts.areas_recorded: 0`.
+- Area and task names are untrusted text from the file, cut to 64 characters with `name_truncated`. Nothing maps tasks to Wiki pages, checks requirements or says which diaries are available.
+- The same timing fields as the other account tools; the file is **not** guaranteed consistent with any other export file. No account name, world, session id, path or raw JSON.
+
+Failures use the same fixed statuses as `character_summary`, with messages naming `diaries.json`.

@@ -10,6 +10,7 @@
 
 mod character;
 mod containers;
+mod diaries;
 mod export_output;
 mod info;
 mod market;
@@ -40,6 +41,10 @@ pub use character::{CharacterSummary, SkillOutput, SummaryStatus, WarningOutput}
 pub use containers::{
     ContainerContents, ContainerOutput, ContainerRowOutput, ContainerWarningOutput, ContentsStatus,
     ItemFilterOutput,
+};
+pub use diaries::{
+    DiaryAreaOutput, DiaryCounts, DiaryStatus, DiaryTaskOutput, DiaryTierOutput,
+    DiaryTierOutputRow, DiaryWarningOutput,
 };
 pub use export_output::{
     ExportFailure, ExportedAtOutput, FailureStatus, ObservationTime, UnreadableReason,
@@ -88,6 +93,7 @@ impl OsrsMcpServer {
                 + Self::character_router()
                 + Self::containers_router()
                 + Self::quests_router()
+                + Self::diaries_router()
                 + Self::market_router()
                 + Self::prices_router(),
             market,
