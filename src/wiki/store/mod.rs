@@ -1172,4 +1172,59 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, StoreError::Corrupt { what: "chunk kind" }));
     }
+
+    /// Stores one page, then overwrites a column with a value the program
+    /// could not have written, and returns the store reopened.
+    fn store_corrupted_by(fixture: &Fixture, sql: &str) -> Store {
+        let mut store = fixture.open();
+        import(&mut store, &fixture.source, &[page(1, 10, "text")]);
+        drop(store);
+        // Foreign keys off, so a page id can change without its chunks.
+        Connection::open(fixture.path())
+            .unwrap()
+            .execute_batch(&format!("PRAGMA foreign_keys = OFF; {sql}"))
+            .unwrap();
+        fixture.open()
+    }
+
+    #[test]
+    fn invalid_stored_page_fields_are_corrupt_whichever_read_finds_them() {
+        let cases = [
+            ("UPDATE page SET title = ''", "title"),
+            ("UPDATE page SET revision_id = 0", "revision id"),
+            (
+                "UPDATE page SET revision_time = 'not a time'",
+                "revision time",
+            ),
+            ("UPDATE page SET redirect_target = ''", "redirect target"),
+        ];
+        for (sql, expected) in cases {
+            let fixture = Fixture::new();
+            let store = store_corrupted_by(&fixture, sql);
+
+            let error = store.page(&fixture.source, page_id(1)).unwrap_err();
+            assert!(
+                matches!(error, StoreError::Corrupt { what } if what == expected),
+                "{sql}: {error:?}"
+            );
+            if expected != "redirect target" {
+                // Search reads the same fields, and a redirect has no chunks.
+                let hits = store.search(&fixture.source, &SearchQuery::new("text", 10).unwrap());
+                assert!(
+                    matches!(hits, Err(StoreError::Corrupt { what }) if what == expected),
+                    "{sql}: {hits:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_invalid_stored_page_id_is_corrupt_when_found_by_title() {
+        let fixture = Fixture::new();
+        let store = store_corrupted_by(&fixture, "UPDATE page SET page_id = -5");
+
+        let error = store.page_by_title(&fixture.source, "Page 1").unwrap_err();
+
+        assert!(matches!(error, StoreError::Corrupt { what: "page id" }));
+    }
 }
