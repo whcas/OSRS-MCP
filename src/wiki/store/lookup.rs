@@ -14,6 +14,7 @@ use rusqlite::{Connection, params};
 
 use super::{
     Operation, PageId, PageTitle, SourceId, Store, StoreError, StoredPage, find_source, read_page,
+    stored_page_id,
 };
 
 /// How many redirects one resolution follows before giving up. `MediaWiki`
@@ -170,16 +171,8 @@ fn page_ids_titled(
     let rows = statement
         .query_map(params![source_key, title], |row| row.get::<_, i64>(0))
         .map_err(StoreError::database(Operation::Read))?;
-    rows.map(|row| {
-        row.map_err(StoreError::database(Operation::Read))
-            .and_then(|id| {
-                u64::try_from(id)
-                    .ok()
-                    .and_then(PageId::new)
-                    .ok_or(StoreError::Corrupt { what: "page id" })
-            })
-    })
-    .collect()
+    rows.map(|row| stored_page_id(row.map_err(StoreError::database(Operation::Read))?))
+        .collect()
 }
 
 /// The form in which titles are compared: without a `#fragment`, with every

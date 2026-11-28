@@ -395,6 +395,9 @@ fn stored_state(
     source_key: i64,
     page: &ImportedPage,
 ) -> Result<Option<StoredState>, StoreError> {
+    // Deliberately not `stored_revision_id`: this comparison only needs the
+    // number, and a stored zero is replaced by any newer import rather than
+    // rejected as corrupt.
     let row: Option<(i64, bool)> = transaction
         .query_row(
             "SELECT revision_id,
@@ -636,25 +639,51 @@ fn read_page(
 
 fn stored_page(row: PageRow) -> Result<StoredPage, StoreError> {
     let (page_id, namespace, title, revision, time, hash, redirect, text) = row;
-    let invalid = |what| StoreError::Corrupt { what };
     Ok(StoredPage {
-        id: u64::try_from(page_id)
-            .ok()
-            .and_then(PageId::new)
-            .ok_or_else(|| invalid("page id"))?,
-        namespace: u32::try_from(namespace).map_err(|_| invalid("namespace"))?,
-        title: PageTitle::new(title).ok_or_else(|| invalid("title"))?,
-        revision: u64::try_from(revision)
-            .ok()
-            .and_then(RevisionId::new)
-            .ok_or_else(|| invalid("revision id"))?,
-        timestamp: RevisionTimestamp::parse(&time).map_err(|_| invalid("revision time"))?,
+        id: stored_page_id(page_id)?,
+        namespace: u32::try_from(namespace)
+            .map_err(|_| StoreError::Corrupt { what: "namespace" })?,
+        title: stored_title(title, "title")?,
+        revision: stored_revision_id(revision)?,
+        timestamp: stored_revision_time(&time)?,
         hash,
         redirect_target: redirect
-            .map(|target| PageTitle::new(target).ok_or_else(|| invalid("redirect target")))
+            .map(|target| stored_title(target, "redirect target"))
             .transpose()?,
         text,
     })
+}
+
+/// Decoders for the page columns. They are written only from validated
+/// values, so one that does not convert back means the database was changed
+/// from outside.
+fn stored_page_id(value: i64) -> Result<PageId, StoreError> {
+    u64::try_from(value)
+        .ok()
+        .and_then(PageId::new)
+        .ok_or(StoreError::Corrupt { what: "page id" })
+}
+
+/// A stored revision id, which like the imported one is positive.
+fn stored_revision_id(value: i64) -> Result<RevisionId, StoreError> {
+    u64::try_from(value)
+        .ok()
+        .and_then(RevisionId::new)
+        .ok_or(StoreError::Corrupt {
+            what: "revision id",
+        })
+}
+
+/// A stored revision timestamp.
+fn stored_revision_time(text: &str) -> Result<RevisionTimestamp, StoreError> {
+    RevisionTimestamp::parse(text).map_err(|_| StoreError::Corrupt {
+        what: "revision time",
+    })
+}
+
+/// A stored title, named `what` in the error (a page title or a redirect target).
+fn stored_title(text: String, what: &'static str) -> Result<PageTitle, StoreError> {
+    PageTitle::new(text).ok_or(StoreError::Corrupt { what })
 }
 
 type ChunkRow = (
@@ -1171,5 +1200,86 @@ mod tests {
             .chunks(&fixture.source, PageId::new(1).unwrap())
             .unwrap_err();
         assert!(matches!(error, StoreError::Corrupt { what: "chunk kind" }));
+    }
+
+    /// Stores one page, then overwrites a column with a value the program
+    /// could not have written, and returns the store reopened.
+    fn store_corrupted_by(fixture: &Fixture, sql: &str) -> Store {
+        let mut store = fixture.open();
+        import(&mut store, &fixture.source, &[page(1, 10, "text")]);
+        drop(store);
+        // Foreign keys off, so a page id can change without its chunks.
+        Connection::open(fixture.path())
+            .unwrap()
+            .execute_batch(&format!("PRAGMA foreign_keys = OFF; {sql}"))
+            .unwrap();
+        fixture.open()
+    }
+
+    #[test]
+    fn invalid_stored_page_fields_are_corrupt_whichever_read_finds_them() {
+        let cases = [
+            ("UPDATE page SET title = ''", "title"),
+            ("UPDATE page SET revision_id = 0", "revision id"),
+            (
+                "UPDATE page SET revision_time = 'not a time'",
+                "revision time",
+            ),
+            ("UPDATE page SET redirect_target = ''", "redirect target"),
+        ];
+        for (sql, expected) in cases {
+            let fixture = Fixture::new();
+            let store = store_corrupted_by(&fixture, sql);
+
+            let error = store.page(&fixture.source, page_id(1)).unwrap_err();
+            assert!(
+                matches!(error, StoreError::Corrupt { what } if what == expected),
+                "{sql}: {error:?}"
+            );
+            if expected != "redirect target" {
+                // Search reads the same fields, and a redirect has no chunks.
+                let hits = store.search(&fixture.source, &SearchQuery::new("text", 10).unwrap());
+                assert!(
+                    matches!(hits, Err(StoreError::Corrupt { what }) if what == expected),
+                    "{sql}: {hits:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stored_page_fields_are_checked_in_column_order() {
+        let reason = |sql: &str| {
+            let fixture = Fixture::new();
+            let store = store_corrupted_by(&fixture, sql);
+            match store.page(&fixture.source, page_id(1)) {
+                Err(StoreError::Corrupt { what }) => what,
+                other => panic!("expected a corrupt value, got {other:?}"),
+            }
+        };
+
+        assert_eq!(reason("UPDATE page SET namespace = -1"), "namespace");
+        assert_eq!(
+            reason("UPDATE page SET namespace = -1, title = '', revision_id = 0"),
+            "namespace"
+        );
+        assert_eq!(
+            reason("UPDATE page SET title = '', revision_id = 0, revision_time = 'x'"),
+            "title"
+        );
+        assert_eq!(
+            reason("UPDATE page SET revision_id = 0, revision_time = 'x', redirect_target = ''"),
+            "revision id"
+        );
+    }
+
+    #[test]
+    fn an_invalid_stored_page_id_is_corrupt_when_found_by_title() {
+        let fixture = Fixture::new();
+        let store = store_corrupted_by(&fixture, "UPDATE page SET page_id = -5");
+
+        let error = store.page_by_title(&fixture.source, "Page 1").unwrap_err();
+
+        assert!(matches!(error, StoreError::Corrupt { what: "page id" }));
     }
 }
