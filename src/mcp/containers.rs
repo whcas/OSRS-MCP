@@ -1,7 +1,7 @@
 //! The `bank_contents` and `equipment_contents` tools: item rows from the local
 //! Character Exporter files.
 //!
-//! This module only adapts. Reading is [`LocalExportSource`](crate::runelite::LocalExportSource)
+//! This module only adapts. Reading is [`ExportSource`](crate::runelite::ExportSource)
 //! and parsing is [`parse_container_export`](crate::runelite::parse_container_export);
 //! here a parsed snapshot becomes a bounded page of rows and a read failure
 //! becomes a fixed, safe status. Item IDs identify items; names are untrusted

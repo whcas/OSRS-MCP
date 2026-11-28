@@ -1,7 +1,7 @@
 //! The `quest_status` tool: quest states from the local Character Exporter
 //! file.
 //!
-//! This module only adapts. Reading is [`LocalExportSource`](crate::runelite::LocalExportSource)
+//! This module only adapts. Reading is [`ExportSource`](crate::runelite::ExportSource)
 //! and parsing is [`parse_quest_export`](crate::runelite::parse_quest_export);
 //! here a parsed export becomes a filtered, paged response and a read failure
 //! becomes a fixed, safe status. Quest IDs are `RuneLite`'s own and are not
