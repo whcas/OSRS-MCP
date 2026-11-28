@@ -135,7 +135,7 @@ impl Assessment {
 }
 
 /// Whether a query contributes to reviewed, provisional or no aggregates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ScoringTier {
     /// Verified references and grades reviewed by a human.
     Reviewed,
@@ -146,7 +146,9 @@ pub enum ScoringTier {
 }
 
 impl ScoringTier {
-    const fn from_query(query: &Query) -> Self {
+    /// The tier the query's references and relevance review put it in.
+    #[must_use]
+    pub const fn from_query(query: &Query) -> Self {
         match (query.relevance, query.references) {
             (Relevance::Reviewed, References::Verified) => Self::Reviewed,
             (
