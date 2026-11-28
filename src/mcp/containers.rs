@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use super::OsrsMcpServer;
 use super::export_output::{
-    ExportFailure, ObservationTime, bounded, bounded_name, failure_for, into_result,
+    ExportFailure, ObservationTime, Page, bounded, bounded_name, failure_for, into_result,
 };
 use crate::domain::ItemId;
 use crate::runelite::{
@@ -53,13 +53,6 @@ struct BankInput {
     item_ids: Option<Vec<u32>>,
 }
 
-/// A validated page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Page {
-    offset: usize,
-    limit: usize,
-}
-
 /// A validated request: which rows, then which page of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Query {
@@ -70,22 +63,9 @@ struct Query {
 
 impl BankInput {
     fn into_query(self) -> Result<Query, String> {
-        let limit = match self.limit {
-            None => DEFAULT_LIMIT,
-            Some(limit) => usize::try_from(limit)
-                .ok()
-                .filter(|limit| (1..=MAX_LIMIT).contains(limit))
-                .ok_or_else(|| format!("limit must be between 1 and {MAX_LIMIT}"))?,
-        };
-        let offset = self
-            .offset
-            .map_or(Ok(0), usize::try_from)
-            .map_err(|_| "offset is too large".to_owned())?;
+        let page = Page::from_arguments(self.offset, self.limit, DEFAULT_LIMIT, MAX_LIMIT)?;
         let item_ids = self.item_ids.map(distinct_item_ids).transpose()?;
-        Ok(Query {
-            page: Page { offset, limit },
-            item_ids,
-        })
+        Ok(Query { page, item_ids })
     }
 }
 
@@ -315,18 +295,13 @@ fn contents(snapshot: &ContainerSnapshot, query: &Query, read_at: Timestamp) -> 
     // on a later page can never be reported as absent.
     let matching = matching_rows(snapshot.rows(), query.item_ids.as_deref());
     let page = query.page;
-    let shown: Vec<ContainerRowOutput> = matching
-        .iter()
-        .skip(page.offset)
-        .take(page.limit)
-        .map(|row| row_output(row))
-        .collect();
+    let (shown, truncated) = page.select(&matching, |row| row_output(row));
 
     ContainerContents {
         status: ContentsStatus::Ok,
         container: container_output(snapshot.kind()),
         observed: ObservationTime::new(snapshot.exported_at(), snapshot.plugin_version(), read_at),
-        truncated: page.offset.saturating_add(shown.len()) < matching.len(),
+        truncated,
         rows: shown,
         total_rows: matching.len(),
         snapshot_rows: snapshot.rows().len(),
