@@ -21,13 +21,14 @@ Set one optional environment variable in the MCP client's server configuration:
 
 ## What is read, and limits
 
-- Only the fixed file names `character.json`, `bank.json`, `inventory.json`, `equipment.json` and `quests.json`. Callers cannot pass a path, and no other file in the directory is opened.
-- At most 256 KiB for `character.json` (`MAX_CHARACTER_EXPORT_BYTES`; a real file is a few kilobytes) at most `MAX_CONTAINER_EXPORT_BYTES` (4 MiB) for each container file and at most `MAX_QUEST_EXPORT_BYTES` (1 MiB) for `quests.json`; the last two are the parsers' own limits. Larger files are rejected without being parsed.
+- Only the fixed file names `character.json`, `bank.json`, `inventory.json`, `equipment.json`, `quests.json` and `diaries.json`. Callers cannot pass a path, and no other file in the directory is opened.
+- At most 256 KiB for `character.json` (`MAX_CHARACTER_EXPORT_BYTES`; a real file is a few kilobytes) at most `MAX_CONTAINER_EXPORT_BYTES` (4 MiB) for each container file and at most `MAX_QUEST_EXPORT_BYTES` (1 MiB) for `quests.json` and at most `MAX_DIARY_EXPORT_BYTES` (2 MiB) for `diaries.json`; the last three are the parsers' own limits. Larger files are rejected without being parsed.
 - Only a regular file: a directory, or a named pipe, with a supported file name is refused. Symbolic links are followed, because the directory is your own.
 - **Trusted directory assumption.** The file type is checked just before the file is opened. That guards against a mistaken file, not against someone who can modify the directory concurrently (for example replacing the file with a named pipe between the check and the open). The directory is the plugin's own, user-owned folder and is assumed not to be modified adversarially. Hardened handling would need platform-specific code and is not provided.
 - Every call reads the file again. There is no cache, file watcher, polling or background work.
 - Container files are read with `LocalExportSource::read_container`. A missing container file is `FileNotFound`, never an empty container: the exporter writes a container only after observing it, and an old file can remain from an earlier session. An observed empty container is a valid snapshot with no rows.
 - `quests.json` is read with `LocalExportSource::read_quests`. A missing file is `FileNotFound`, never "no quest started", and a quest absent from a valid file is unrecorded rather than not started.
+- `diaries.json` is read with `LocalExportSource::read_diaries`. A missing file is `FileNotFound`, never "no diary task done". The tier completion flag, the `tasks_done` count and the optional task list are independent observations that can disagree; the parser reports warnings and the reader reconciles nothing.
 - Each file has its own `exported_at`. Reads of different files are separate observations, not one consistent snapshot of the account.
 - Parsing is `parse_character_export`; warnings and `exported_at` are preserved. `exported_at` is the time of the last change to the exported data, not the time of the read or a sign that the player is online.
 

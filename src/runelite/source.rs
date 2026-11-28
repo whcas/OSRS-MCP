@@ -21,8 +21,9 @@ use thiserror::Error;
 
 use super::{
     CharacterExport, CharacterParseError, ContainerKind, ContainerParseError, ContainerSnapshot,
-    MAX_CONTAINER_EXPORT_BYTES, MAX_QUEST_EXPORT_BYTES, QuestParseError, QuestProgress,
-    parse_character_export, parse_container_export, parse_quest_export,
+    DiaryParseError, DiaryProgress, MAX_CONTAINER_EXPORT_BYTES, MAX_DIARY_EXPORT_BYTES,
+    MAX_QUEST_EXPORT_BYTES, QuestParseError, QuestProgress, parse_character_export,
+    parse_container_export, parse_diary_export, parse_quest_export,
 };
 
 /// Environment variable naming the account's Character Exporter directory,
@@ -43,6 +44,9 @@ pub const EQUIPMENT_FILE_NAME: &str = "equipment.json";
 
 /// Quest progress file.
 pub const QUEST_FILE_NAME: &str = "quests.json";
+
+/// Diary progress file.
+pub const DIARY_FILE_NAME: &str = "diaries.json";
 
 /// The only file this module reads for `kind`.
 #[must_use]
@@ -173,6 +177,26 @@ impl LocalExportSource {
             .map_err(ExportReadError::Parse)
     }
 
+    /// Reads and parses `diaries.json`.
+    ///
+    /// Reads and failures behave as for [`read_character`](Self::read_character),
+    /// with the limit [`MAX_DIARY_EXPORT_BYTES`]. A missing file is
+    /// [`ExportReadError::FileNotFound`]; it never means that no diary task is
+    /// done. The parsed fields are independent observations that can disagree
+    /// (see [`DiaryProgress`]); nothing is reconciled. The file has its own
+    /// `exported_at`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExportReadError`] if nothing is configured, the file cannot
+    /// be read within the limit, or its content is not a valid export.
+    pub fn read_diaries(&self) -> Result<DiaryProgress, ExportReadError> {
+        let bytes = self.read_file(DIARY_FILE_NAME, diary_limit())?;
+        parse_diary_export(&bytes)
+            .map_err(ParseFailure::from)
+            .map_err(ExportReadError::Parse)
+    }
+
     fn read_file(&self, file_name: &str, limit: u64) -> Result<Vec<u8>, ExportReadError> {
         let directory = self
             .directory
@@ -190,6 +214,11 @@ fn container_limit() -> u64 {
 /// The quest parser's byte limit as the reader's unit.
 fn quest_limit() -> u64 {
     u64::try_from(MAX_QUEST_EXPORT_BYTES).unwrap_or(u64::MAX)
+}
+
+/// The diary parser's byte limit as the reader's unit.
+fn diary_limit() -> u64 {
+    u64::try_from(MAX_DIARY_EXPORT_BYTES).unwrap_or(u64::MAX)
 }
 
 /// Why an export file could not be read and imported.
@@ -251,6 +280,9 @@ pub enum ParseFailure {
     /// `quests.json` was rejected.
     #[error(transparent)]
     Quest(#[from] QuestParseError),
+    /// `diaries.json` was rejected.
+    #[error(transparent)]
+    Diary(#[from] DiaryParseError),
 }
 
 impl ParseFailure {
@@ -261,6 +293,7 @@ impl ParseFailure {
             Self::Character(error) => error.is_transient(),
             Self::Container(error) => error.is_transient(),
             Self::Quest(error) => error.is_transient(),
+            Self::Diary(error) => error.is_transient(),
         }
     }
 }
@@ -317,6 +350,7 @@ fn classify_io(error: &io::Error) -> ExportReadError {
 mod tests {
     use tempfile::TempDir;
 
+    use super::super::{DiaryTier, DiaryWarning};
     use super::*;
 
     const SYNTHETIC_EXPORT: &[u8] =
@@ -565,6 +599,8 @@ mod tests {
         }
     }
 
+    const SYNTHETIC_DIARIES: &[u8] =
+        include_bytes!("../../tests/fixtures/runelite_export/diaries.synthetic.json");
     const SYNTHETIC_QUESTS: &[u8] =
         include_bytes!("../../tests/fixtures/runelite_export/quests.synthetic.json");
 
@@ -838,6 +874,123 @@ mod tests {
             .into_owned();
 
         let error = source_for(&dir).read_quests().unwrap_err();
+        let message = format!("{error:?} {error}");
+
+        assert!(!message.contains("private-marker"), "{message}");
+        assert!(!message.contains(&directory_name), "{message}");
+    }
+
+    fn write_diaries(dir: &TempDir, content: &[u8]) {
+        fs::write(dir.path().join(DIARY_FILE_NAME), content).unwrap();
+    }
+
+    #[test]
+    fn a_valid_diary_file_is_read_and_parsed() {
+        let dir = new_dir();
+        write_diaries(&dir, SYNTHETIC_DIARIES);
+
+        let progress = source_for(&dir).read_diaries().unwrap();
+
+        assert_eq!(progress, parse_diary_export(SYNTHETIC_DIARIES).unwrap());
+    }
+
+    #[test]
+    fn conflicting_diary_observations_are_returned_with_warnings_not_reconciled() {
+        // The synthetic fixture marks a tier complete while its only listed task is not.
+        let dir = new_dir();
+        write_diaries(&dir, SYNTHETIC_DIARIES);
+
+        let progress = source_for(&dir).read_diaries().unwrap();
+
+        assert!(
+            progress
+                .warnings()
+                .contains(&DiaryWarning::CompleteWithIncompleteTask {
+                    area: 1,
+                    tier: DiaryTier::Easy
+                })
+        );
+        assert_eq!(progress.areas().len(), 1);
+    }
+
+    #[test]
+    fn a_missing_diary_file_is_not_a_report_that_no_task_is_done() {
+        let dir = new_dir();
+        write_character(&dir, SYNTHETIC_EXPORT);
+
+        assert_eq!(
+            source_for(&dir).read_diaries(),
+            Err(ExportReadError::FileNotFound)
+        );
+    }
+
+    #[test]
+    fn diaries_are_read_fresh_each_call() {
+        let dir = new_dir();
+        write_diaries(&dir, SYNTHETIC_DIARIES);
+        let source = source_for(&dir);
+        let first = source.read_diaries().unwrap();
+
+        let rewritten = String::from_utf8(SYNTHETIC_DIARIES.to_vec())
+            .unwrap()
+            .replace("2026-01-02T08:20:30.123456789+01:00", "2026-03-03T08:15Z");
+        write_diaries(&dir, rewritten.as_bytes());
+        let second = source.read_diaries().unwrap();
+
+        assert_ne!(first.exported_at(), second.exported_at());
+    }
+
+    #[test]
+    fn a_diary_file_over_the_parser_limit_is_rejected_without_being_parsed() {
+        let dir = new_dir();
+        write_diaries(&dir, &vec![b' '; MAX_DIARY_EXPORT_BYTES + 1]);
+
+        assert_eq!(
+            source_for(&dir).read_diaries(),
+            Err(ExportReadError::TooLarge {
+                limit: diary_limit()
+            })
+        );
+    }
+
+    #[test]
+    fn a_diary_file_exactly_at_the_limit_is_read() {
+        let dir = new_dir();
+        let mut content = SYNTHETIC_DIARIES.to_vec();
+        content.resize(MAX_DIARY_EXPORT_BYTES, b' ');
+        write_diaries(&dir, &content);
+
+        assert!(source_for(&dir).read_diaries().is_ok());
+    }
+
+    #[test]
+    fn a_truncated_diary_file_is_transient_and_invalid_content_is_not() {
+        let dir = new_dir();
+        write_diaries(&dir, &SYNTHETIC_DIARIES[..SYNTHETIC_DIARIES.len() / 2]);
+        assert!(source_for(&dir).read_diaries().unwrap_err().is_transient());
+
+        write_diaries(&dir, b"this is not json");
+        let error = source_for(&dir).read_diaries().unwrap_err();
+
+        assert_eq!(
+            error,
+            ExportReadError::Parse(DiaryParseError::InvalidJson.into())
+        );
+        assert!(!error.is_transient());
+    }
+
+    #[test]
+    fn diary_errors_do_not_contain_the_path_or_file_content() {
+        let dir = new_dir();
+        write_diaries(&dir, b"{\"private-marker\": 1");
+        let directory_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let error = source_for(&dir).read_diaries().unwrap_err();
         let message = format!("{error:?} {error}");
 
         assert!(!message.contains("private-marker"), "{message}");
