@@ -119,6 +119,36 @@ impl Store {
         })
     }
 
+    /// The sources that have imported pages into this store, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Fails on a database error or if a stored value is invalid.
+    pub fn sources(&self) -> Result<Vec<SourceId>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT site_name, db_name, base_url FROM source ORDER BY id")
+            .map_err(StoreError::database(Operation::Read))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(StoreError::database(Operation::Read))?;
+        rows.map(|row| {
+            let (site_name, db_name, base_url) =
+                row.map_err(StoreError::database(Operation::Read))?;
+            // The empty string stands for "no database name" in storage.
+            let db_name = (!db_name.is_empty()).then_some(db_name);
+            SourceId::new(site_name, db_name, base_url)
+                .map_err(|_| StoreError::Corrupt { what: "source" })
+        })
+        .collect()
+    }
+
     /// The stored current revision of a page, or `None` if the store has none.
     ///
     /// # Errors
@@ -1109,6 +1139,22 @@ mod tests {
         assert_eq!(texts(&store, &fixture.source, 1), ["mine"]);
         assert_eq!(texts(&store, &other, 1), ["theirs"]);
         assert_eq!(revision_of(&store, &other, 1), Some(5));
+    }
+
+    #[test]
+    fn sources_lists_every_source_that_imported_pages_in_order() {
+        let fixture = Fixture::new();
+        let other = SourceId::new(
+            "Other Wiki".to_owned(),
+            None,
+            "https://other.example/wiki/Main_Page".to_owned(),
+        )
+        .unwrap();
+        let mut store = fixture.open();
+        assert_eq!(store.sources().unwrap(), []);
+        import(&mut store, &fixture.source, &[page(1, 10, "mine")]);
+        import(&mut store, &other, &[page(1, 5, "theirs")]);
+        assert_eq!(store.sources().unwrap(), [fixture.source.clone(), other]);
     }
 
     #[test]
