@@ -9,6 +9,18 @@ fn run(args: &[&str]) -> Output {
         .expect("binary should start")
 }
 
+/// A usage error exits with 2 and keeps stdout empty, so that it can never
+/// corrupt MCP protocol output; the usage text goes to stderr.
+fn assert_usage_error(output: &Output) {
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout must stay clean for protocol output"
+    );
+    let stderr = String::from_utf8(output.stderr.clone()).expect("stderr should be UTF-8");
+    assert!(stderr.contains("Usage:"), "stderr: {stderr}");
+}
+
 #[test]
 fn version_flag_prints_name_and_version_to_stdout() {
     let output = run(&["--version"]);
@@ -23,26 +35,14 @@ fn version_flag_prints_name_and_version_to_stdout() {
 fn unknown_argument_fails_with_usage_on_stderr_only() {
     let output = run(&["--no-such-flag"]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(
-        output.stdout.is_empty(),
-        "stdout must stay clean for protocol output"
-    );
-    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
-    assert!(stderr.contains("Usage:"), "stderr: {stderr}");
+    assert_usage_error(&output);
 }
 
 #[test]
 fn no_arguments_fails_with_usage_on_stderr_only() {
     let output = run(&[]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(
-        output.stdout.is_empty(),
-        "stdout must stay clean for protocol output"
-    );
-    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
-    assert!(stderr.contains("Usage:"), "stderr: {stderr}");
+    assert_usage_error(&output);
 }
 
 #[cfg(unix)]
@@ -56,11 +56,5 @@ fn non_unicode_argument_fails_with_usage_instead_of_panicking() {
         .output()
         .expect("binary should start");
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(
-        output.stdout.is_empty(),
-        "stdout must stay clean for protocol output"
-    );
-    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
-    assert!(stderr.contains("Usage:"), "stderr: {stderr}");
+    assert_usage_error(&output);
 }
