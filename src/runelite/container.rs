@@ -524,7 +524,9 @@ mod tests {
         input.as_object_mut().unwrap().remove("plugin_version");
         assert_eq!(plugin_version(&input), Ok(None));
 
+        // With both invalid, `exported_at` is the one reported.
         input["exported_at"] = json!("yesterday");
+        input["plugin_version"] = json!(7);
         assert_eq!(
             error(&input),
             Some(ContainerParseError::InvalidField {
