@@ -395,6 +395,9 @@ fn stored_state(
     source_key: i64,
     page: &ImportedPage,
 ) -> Result<Option<StoredState>, StoreError> {
+    // Deliberately not `stored_revision_id`: this comparison only needs the
+    // number, and a stored zero is replaced by any newer import rather than
+    // rejected as corrupt.
     let row: Option<(i64, bool)> = transaction
         .query_row(
             "SELECT revision_id,
@@ -651,9 +654,9 @@ fn stored_page(row: PageRow) -> Result<StoredPage, StoreError> {
     })
 }
 
-// The page columns below are written only from validated values, so a value
-// that does not convert back means the database was changed from outside.
-
+/// Decoders for the page columns. They are written only from validated
+/// values, so one that does not convert back means the database was changed
+/// from outside.
 fn stored_page_id(value: i64) -> Result<PageId, StoreError> {
     u64::try_from(value)
         .ok()
@@ -661,6 +664,7 @@ fn stored_page_id(value: i64) -> Result<PageId, StoreError> {
         .ok_or(StoreError::Corrupt { what: "page id" })
 }
 
+/// A stored revision id, which like the imported one is positive.
 fn stored_revision_id(value: i64) -> Result<RevisionId, StoreError> {
     u64::try_from(value)
         .ok()
@@ -670,6 +674,7 @@ fn stored_revision_id(value: i64) -> Result<RevisionId, StoreError> {
         })
 }
 
+/// A stored revision timestamp.
 fn stored_revision_time(text: &str) -> Result<RevisionTimestamp, StoreError> {
     RevisionTimestamp::parse(text).map_err(|_| StoreError::Corrupt {
         what: "revision time",
@@ -1240,6 +1245,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn stored_page_fields_are_checked_in_column_order() {
+        let reason = |sql: &str| {
+            let fixture = Fixture::new();
+            let store = store_corrupted_by(&fixture, sql);
+            match store.page(&fixture.source, page_id(1)) {
+                Err(StoreError::Corrupt { what }) => what,
+                other => panic!("expected a corrupt value, got {other:?}"),
+            }
+        };
+
+        assert_eq!(reason("UPDATE page SET namespace = -1"), "namespace");
+        assert_eq!(
+            reason("UPDATE page SET namespace = -1, title = '', revision_id = 0"),
+            "namespace"
+        );
+        assert_eq!(
+            reason("UPDATE page SET title = '', revision_id = 0, revision_time = 'x'"),
+            "title"
+        );
+        assert_eq!(
+            reason("UPDATE page SET revision_id = 0, revision_time = 'x', redirect_target = ''"),
+            "revision id"
+        );
     }
 
     #[test]
