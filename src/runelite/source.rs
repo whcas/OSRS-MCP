@@ -60,6 +60,49 @@ pub const fn container_file_name(kind: ContainerKind) -> &'static str {
 /// generous but keeps a wrong or hostile file from being read into memory.
 pub const MAX_CHARACTER_EXPORT_BYTES: u64 = 256 * 1024;
 
+/// Where parsed account exports come from.
+///
+/// The MCP adapter reads through this seam, so it can be driven without a
+/// file system. [`LocalExportSource`] is the production implementation; each
+/// method behaves as the inherent method of the same name there. Reads are
+/// blocking.
+pub trait ExportSource: fmt::Debug + Send + Sync {
+    /// Reads and parses `character.json`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExportReadError`] if the export cannot be read or imported.
+    fn read_character(&self) -> Result<CharacterExport, ExportReadError>;
+
+    /// Reads and parses the bank, inventory or equipment file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExportReadError`] if the export cannot be read or imported.
+    fn read_container(&self, kind: ContainerKind) -> Result<ContainerSnapshot, ExportReadError>;
+
+    /// Reads and parses `quests.json`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExportReadError`] if the export cannot be read or imported.
+    fn read_quests(&self) -> Result<QuestProgress, ExportReadError>;
+}
+
+impl ExportSource for LocalExportSource {
+    fn read_character(&self) -> Result<CharacterExport, ExportReadError> {
+        Self::read_character(self)
+    }
+
+    fn read_container(&self, kind: ContainerKind) -> Result<ContainerSnapshot, ExportReadError> {
+        Self::read_container(self, kind)
+    }
+
+    fn read_quests(&self) -> Result<QuestProgress, ExportReadError> {
+        Self::read_quests(self)
+    }
+}
+
 /// Where `character.json` is read from, if anywhere.
 #[derive(Clone)]
 pub struct LocalExportSource {

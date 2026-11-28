@@ -11,7 +11,7 @@ use rmcp::{
 use serde::Serialize;
 
 use super::OsrsMcpServer;
-use crate::runelite::{ExportReadError, ExportedAt, LocalExportSource};
+use crate::runelite::{ExportReadError, ExportSource, ExportedAt};
 
 /// Longest display name returned, in characters. Names come from the export
 /// and are untrusted.
@@ -146,7 +146,7 @@ impl OsrsMcpServer {
     pub(super) async fn read_export<T, O>(
         &self,
         file: &'static str,
-        read: impl FnOnce(&LocalExportSource) -> Result<T, ExportReadError> + Send + 'static,
+        read: impl FnOnce(&dyn ExportSource) -> Result<T, ExportReadError> + Send + 'static,
         build: impl FnOnce(&T, Timestamp) -> O + Send,
     ) -> Result<CallToolResult, ErrorData>
     where
@@ -154,7 +154,7 @@ impl OsrsMcpServer {
         O: Serialize,
     {
         let source = self.export_source.clone();
-        let read = tokio::task::spawn_blocking(move || read(&source))
+        let read = tokio::task::spawn_blocking(move || read(source.as_ref()))
             .await
             .map_err(|_| ErrorData::internal_error("the export read task failed", None))?;
         let outcome = read
@@ -342,7 +342,13 @@ pub(super) fn failure_for(error: &ExportReadError, file: &str) -> ExportFailure 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use rmcp::{ServiceExt, model::CallToolRequestParams};
+
+    use super::super::test_support::FakeMarket;
     use super::*;
+    use crate::runelite::{CharacterExport, ContainerKind, ContainerSnapshot, QuestProgress};
 
     #[test]
     fn page_arguments_default_and_are_bounded_with_a_fixed_message() {
@@ -378,5 +384,69 @@ mod tests {
         assert_eq!(page(3, 2).select(&items, |n| *n), (vec![4, 5], false));
         assert_eq!(page(4, 10).select(&items, |n| *n), (vec![5], false));
         assert_eq!(page(9, 2).select(&items, |n| *n), (vec![], false));
+    }
+
+    /// An export source whose quest read is whatever the test supplies, so the
+    /// adapter can be driven through failures a real directory cannot be made
+    /// to produce on demand.
+    #[derive(Debug)]
+    struct ScriptedExports(fn() -> Result<QuestProgress, ExportReadError>);
+
+    impl ExportSource for ScriptedExports {
+        fn read_character(&self) -> Result<CharacterExport, ExportReadError> {
+            panic!("only quests are scripted");
+        }
+
+        fn read_container(&self, _: ContainerKind) -> Result<ContainerSnapshot, ExportReadError> {
+            panic!("only quests are scripted");
+        }
+
+        fn read_quests(&self) -> Result<QuestProgress, ExportReadError> {
+            (self.0)()
+        }
+    }
+
+    async fn quest_status_through(
+        source: ScriptedExports,
+    ) -> Result<CallToolResult, rmcp::ServiceError> {
+        let server =
+            OsrsMcpServer::with_market(Arc::new(FakeMarket::default())).with_export_source(source);
+        let (client_io, server_io) = tokio::io::duplex(16 * 1024);
+        tokio::spawn(async move {
+            if let Ok(running) = server.serve(server_io).await {
+                let _ = running.waiting().await;
+            }
+        });
+        let client = ().serve(client_io).await.expect("client should initialise");
+        client
+            .call_tool(CallToolRequestParams::new("quest_status"))
+            .await
+    }
+
+    #[tokio::test]
+    async fn an_operating_system_failure_is_a_fixed_unreadable_result() {
+        let result = quest_status_through(ScriptedExports(|| {
+            Err(ExportReadError::Io {
+                kind: std::io::ErrorKind::Other,
+            })
+        }))
+        .await
+        .expect("a read failure is a tool result");
+
+        assert_eq!(result.is_error, Some(true));
+        let text = &result.content[0].as_text().expect("text").text;
+        assert!(text.contains("unreadable"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_read_that_panics_is_an_internal_error_not_a_hung_call() {
+        let outcome = quest_status_through(ScriptedExports(|| panic!("scripted failure"))).await;
+
+        match outcome {
+            Err(rmcp::ServiceError::McpError(error)) => {
+                assert_eq!(error.message, "the export read task failed");
+            }
+            other => panic!("expected a protocol error, got {other:?}"),
+        }
     }
 }
