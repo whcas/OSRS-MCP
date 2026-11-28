@@ -3,6 +3,12 @@
 /// Coverage-aware scoring of ranked Wiki retrieval results.
 pub mod scorer;
 
+/// Runs dataset queries against an imported corpus and scores them.
+pub mod run;
+
+/// Aggregates a run's scores by tier, category and mode.
+pub mod summary;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
