@@ -19,9 +19,7 @@ use rmcp::{
 use serde::Serialize;
 
 use super::OsrsMcpServer;
-use super::export_output::{
-    EXPORTED_AT_MEANING, ExportedAtOutput, bounded, bounded_name, seconds_between, shown_version,
-};
+use super::export_output::{ObservationTime, bounded, bounded_name};
 use crate::runelite::{
     CHARACTER_FILE_NAME, CharacterExport, LocalExportSource, Skill, SkillRecord, Warning,
 };
@@ -79,34 +77,14 @@ pub enum WarningOutput {
 }
 
 /// Successful result of `character_summary`.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "a flat wire contract: each flag answers a distinct question for the client, and \
-              grouping them would change the approved response schema"
-)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct CharacterSummary {
     /// Always `ok`.
     pub status: SummaryStatus,
-    /// When the exporter last changed the data.
-    pub exported_at: ExportedAtOutput,
-    /// What `exported_at` does and does not mean.
-    pub exported_at_meaning: String,
-    /// When this server read the file (its own clock, UTC, RFC 3339).
-    pub read_at: String,
-    /// Whole seconds from `exported_at` to `read_at`. Elapsed time since the
-    /// last change, not staleness: an unchanged export is not rewritten. Null
-    /// when `exported_at` is later than `read_at` (see `exported_at_in_future`).
-    pub seconds_since_last_change: Option<u64>,
-    /// True if `exported_at` is later than `read_at`, for example because of
-    /// clock differences. The age is then unknown rather than zero.
-    pub exported_at_in_future: bool,
-    /// The exporter plugin version, null if the file has none.
-    pub plugin_version: Option<String>,
-    /// True if the file has a `plugin_version` that is not shown because it
-    /// does not look like a version number.
-    pub plugin_version_suppressed: bool,
+    /// Timing of this file only, flattened into the response.
+    #[serde(flatten)]
+    pub observed: ObservationTime,
     /// Skills in the order the file lists them, at most 64.
     pub skills: Vec<SkillOutput>,
     /// How many skills the export contains. Greater than `skills.len()` only
@@ -155,23 +133,12 @@ impl OsrsMcpServer {
 
 /// Builds the response for a parsed export, read at `read_at`.
 fn summarise(export: &CharacterExport, read_at: Timestamp) -> CharacterSummary {
-    let exported_at = export.exported_at().timestamp();
-    let (plugin_version, plugin_version_suppressed) = shown_version(export.plugin_version());
     let (warnings, warning_count) = bounded(export.warnings(), MAX_WARNINGS, warning_output);
     let (skills, skill_count) = bounded(export.skills(), MAX_SKILLS, skill_output);
 
     CharacterSummary {
         status: SummaryStatus::Ok,
-        exported_at: ExportedAtOutput {
-            text: export.exported_at().text().to_owned(),
-            utc: exported_at.to_string(),
-        },
-        exported_at_meaning: EXPORTED_AT_MEANING.to_owned(),
-        read_at: read_at.to_string(),
-        seconds_since_last_change: seconds_between(exported_at, read_at),
-        exported_at_in_future: exported_at > read_at,
-        plugin_version,
-        plugin_version_suppressed,
+        observed: ObservationTime::new(export.exported_at(), export.plugin_version(), read_at),
         skills_truncated: skill_count > skills.len(),
         skills,
         skill_count,
@@ -214,7 +181,7 @@ mod tests {
     use std::io;
 
     use super::super::export_output::{
-        ExportFailure, FailureStatus, MAX_NAME_CHARS, UnreadableReason, failure_for,
+        ExportFailure, FailureStatus, MAX_NAME_CHARS, UnreadableReason, failure_for, shown_version,
     };
     use super::*;
     use crate::runelite::{CharacterParseError, ExportReadError, parse_character_export};
@@ -251,13 +218,19 @@ mod tests {
         let summary = synthetic_summary("2026-01-01T12:01:00Z");
 
         assert_eq!(summary.status, SummaryStatus::Ok);
-        assert_eq!(summary.exported_at.text, "2026-01-01T12:00:00.123456Z");
-        assert_eq!(summary.exported_at.utc, "2026-01-01T12:00:00.123456Z");
-        assert_eq!(summary.read_at, "2026-01-01T12:01:00Z");
-        assert_eq!(summary.seconds_since_last_change, Some(59));
-        assert!(!summary.exported_at_in_future);
-        assert_eq!(summary.plugin_version.as_deref(), Some("0.6.0"));
-        assert!(!summary.plugin_version_suppressed);
+        assert_eq!(
+            summary.observed.exported_at.text,
+            "2026-01-01T12:00:00.123456Z"
+        );
+        assert_eq!(
+            summary.observed.exported_at.utc,
+            "2026-01-01T12:00:00.123456Z"
+        );
+        assert_eq!(summary.observed.read_at, "2026-01-01T12:01:00Z");
+        assert_eq!(summary.observed.seconds_since_last_change, Some(59));
+        assert!(!summary.observed.exported_at_in_future);
+        assert_eq!(summary.observed.plugin_version.as_deref(), Some("0.6.0"));
+        assert!(!summary.observed.plugin_version_suppressed);
         assert_eq!(summary.skill_count, 24);
         assert_eq!(summary.skills.len(), 24);
         assert!(!summary.skills_truncated);
@@ -286,16 +259,16 @@ mod tests {
     fn the_age_is_zero_when_read_in_the_same_second() {
         let summary = synthetic_summary("2026-01-01T12:00:00.5Z");
 
-        assert_eq!(summary.seconds_since_last_change, Some(0));
-        assert!(!summary.exported_at_in_future);
+        assert_eq!(summary.observed.seconds_since_last_change, Some(0));
+        assert!(!summary.observed.exported_at_in_future);
     }
 
     #[test]
     fn a_future_export_time_has_no_age_and_is_flagged() {
         let summary = synthetic_summary("2025-12-31T12:00:00Z");
 
-        assert_eq!(summary.seconds_since_last_change, None);
-        assert!(summary.exported_at_in_future);
+        assert_eq!(summary.observed.seconds_since_last_change, None);
+        assert!(summary.observed.exported_at_in_future);
     }
 
     #[test]
@@ -303,8 +276,8 @@ mod tests {
         // Exported at .123456, read at .1: the same whole second.
         let summary = synthetic_summary("2026-01-01T12:00:00.1Z");
 
-        assert_eq!(summary.seconds_since_last_change, None);
-        assert!(summary.exported_at_in_future);
+        assert_eq!(summary.observed.seconds_since_last_change, None);
+        assert!(summary.observed.exported_at_in_future);
     }
 
     #[test]
@@ -312,8 +285,14 @@ mod tests {
         // 365 days less the fraction of a second in the exported time.
         let summary = synthetic_summary("2027-01-01T12:00:00Z");
 
-        assert_eq!(summary.seconds_since_last_change, Some(31_535_999));
-        assert!(!summary.exported_at_meaning.to_lowercase().contains("stale"));
+        assert_eq!(summary.observed.seconds_since_last_change, Some(31_535_999));
+        assert!(
+            !summary
+                .observed
+                .exported_at_meaning
+                .to_lowercase()
+                .contains("stale")
+        );
     }
 
     #[test]
@@ -547,5 +526,34 @@ mod tests {
             let text = serde_json::to_string(&failure(&error)).unwrap();
             assert!(!text.contains('/') && !text.contains('\\'), "{text}");
         }
+    }
+
+    #[test]
+    fn the_response_is_one_flat_object_with_the_timing_fields_in_a_fixed_order() {
+        let text = serde_json::to_string(&synthetic_summary("2026-01-01T12:01:00Z")).unwrap();
+        let positions: Vec<usize> = [
+            "status",
+            "exported_at",
+            "exported_at_meaning",
+            "read_at",
+            "seconds_since_last_change",
+            "exported_at_in_future",
+            "plugin_version",
+            "plugin_version_suppressed",
+            "skills",
+            "skill_count",
+            "skills_truncated",
+            "warnings",
+            "warning_count",
+            "warnings_truncated",
+        ]
+        .iter()
+        .map(|key| {
+            text.find(&format!("\"{key}\":"))
+                .unwrap_or_else(|| panic!("{key} is missing"))
+        })
+        .collect();
+        assert!(positions.is_sorted(), "{positions:?}");
+        assert!(!text.contains("observed"), "{text}");
     }
 }
