@@ -181,6 +181,21 @@ pub(super) fn into_result<T: Serialize>(
     }
 }
 
+/// Why `offset` and `limit` were refused. The messages are the tool's input
+/// errors, so they never echo the rejected value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub(super) enum PageError {
+    /// `limit` was zero or above the tool's maximum.
+    #[error("limit must be between 1 and {max}")]
+    LimitOutOfRange {
+        /// The tool's largest page.
+        max: usize,
+    },
+    /// `offset` does not fit this platform's `usize`.
+    #[error("offset is too large")]
+    OffsetTooLarge,
+}
+
 /// A validated window onto a list of results: how many to skip, then how many
 /// to return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,17 +212,17 @@ impl Page {
         limit: Option<u32>,
         default_limit: usize,
         max_limit: usize,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, PageError> {
         let limit = match limit {
             None => default_limit,
             Some(limit) => usize::try_from(limit)
                 .ok()
                 .filter(|limit| (1..=max_limit).contains(limit))
-                .ok_or_else(|| format!("limit must be between 1 and {max_limit}"))?,
+                .ok_or(PageError::LimitOutOfRange { max: max_limit })?,
         };
         let offset = offset
             .map_or(Ok(0), usize::try_from)
-            .map_err(|_| "offset is too large".to_owned())?;
+            .map_err(|_| PageError::OffsetTooLarge)?;
         Ok(Self { offset, limit })
     }
 
@@ -363,10 +378,19 @@ mod tests {
         for limit in [0, 201, u32::MAX] {
             assert_eq!(
                 Page::from_arguments(None, Some(limit), 100, 200),
-                Err("limit must be between 1 and 200".to_owned()),
+                Err(PageError::LimitOutOfRange { max: 200 }),
                 "limit {limit}"
             );
         }
+    }
+
+    #[test]
+    fn page_errors_read_as_fixed_messages_that_name_no_value() {
+        assert_eq!(
+            PageError::LimitOutOfRange { max: 200 }.to_string(),
+            "limit must be between 1 and 200"
+        );
+        assert_eq!(PageError::OffsetTooLarge.to_string(), "offset is too large");
     }
 
     #[test]

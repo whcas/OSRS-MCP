@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use super::OsrsMcpServer;
 use super::containers::ContentsStatus;
-use super::export_output::{ObservationTime, Page, bounded, bounded_name_to};
+use super::export_output::{ObservationTime, Page, PageError, bounded, bounded_name_to};
 use crate::runelite::{
     LocalExportSource, QUEST_FILE_NAME, QuestProgress, QuestRecord, QuestState, QuestWarning,
 };
@@ -79,7 +79,7 @@ struct Query {
 }
 
 impl QuestStatusInput {
-    fn into_query(self) -> Result<Query, String> {
+    fn into_query(self) -> Result<Query, PageError> {
         let page = Page::from_arguments(self.offset, self.limit, DEFAULT_LIMIT, MAX_LIMIT)?;
         Ok(Query {
             state: self.state,
@@ -192,7 +192,7 @@ impl OsrsMcpServer {
     ) -> Result<CallToolResult, ErrorData> {
         let query = input
             .into_query()
-            .map_err(|message| ErrorData::invalid_params(message, None))?;
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
 
         self.read_export(
             QUEST_FILE_NAME,

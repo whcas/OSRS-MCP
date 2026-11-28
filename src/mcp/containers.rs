@@ -18,7 +18,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 
 use super::OsrsMcpServer;
-use super::export_output::{ObservationTime, Page, bounded, bounded_name};
+use super::export_output::{ObservationTime, Page, PageError, bounded, bounded_name};
 use crate::domain::ItemId;
 use crate::runelite::{
     ContainerKind, ContainerRow, ContainerSnapshot, ContainerWarning, container_file_name,
@@ -59,8 +59,17 @@ struct Query {
     item_ids: Option<Vec<ItemId>>,
 }
 
+/// Why a `bank_contents` request was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+enum BankInputError {
+    #[error(transparent)]
+    Page(#[from] PageError),
+    #[error("item_ids must list between 1 and {MAX_ITEM_IDS} item ids")]
+    ItemIdCount,
+}
+
 impl BankInput {
-    fn into_query(self) -> Result<Query, String> {
+    fn into_query(self) -> Result<Query, BankInputError> {
         let page = Page::from_arguments(self.offset, self.limit, DEFAULT_LIMIT, MAX_LIMIT)?;
         let item_ids = self.item_ids.map(distinct_item_ids).transpose()?;
         Ok(Query { page, item_ids })
@@ -69,11 +78,9 @@ impl BankInput {
 
 /// The requested IDs without repeats, in request order. A repeat is harmless
 /// and ignored; an empty or oversized list is not.
-fn distinct_item_ids(requested: Vec<u32>) -> Result<Vec<ItemId>, String> {
+fn distinct_item_ids(requested: Vec<u32>) -> Result<Vec<ItemId>, BankInputError> {
     if !(1..=MAX_ITEM_IDS).contains(&requested.len()) {
-        return Err(format!(
-            "item_ids must list between 1 and {MAX_ITEM_IDS} item ids"
-        ));
+        return Err(BankInputError::ItemIdCount);
     }
     let mut ids: Vec<ItemId> = Vec::with_capacity(requested.len());
     for id in requested.into_iter().map(ItemId) {
@@ -223,7 +230,7 @@ impl OsrsMcpServer {
     ) -> Result<CallToolResult, ErrorData> {
         let query = input
             .into_query()
-            .map_err(|message| ErrorData::invalid_params(message, None))?;
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
         self.container_result(ContainerKind::Bank, query).await
     }
 
@@ -587,6 +594,28 @@ mod tests {
                 },
                 item_ids: None
             })
+        );
+    }
+
+    #[test]
+    fn input_errors_are_typed_and_keep_their_tool_messages() {
+        let bad_limit = input(None, Some(0), None).into_query();
+        let bad_ids = input(None, None, Some(vec![])).into_query();
+
+        assert_eq!(
+            bad_limit,
+            Err(BankInputError::Page(PageError::LimitOutOfRange {
+                max: MAX_LIMIT
+            }))
+        );
+        assert_eq!(bad_ids, Err(BankInputError::ItemIdCount));
+        assert_eq!(
+            bad_limit.unwrap_err().to_string(),
+            "limit must be between 1 and 200"
+        );
+        assert_eq!(
+            bad_ids.unwrap_err().to_string(),
+            "item_ids must list between 1 and 50 item ids"
         );
     }
 
