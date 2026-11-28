@@ -17,7 +17,7 @@ fn assert_usage_error(output: &Output) {
         output.stdout.is_empty(),
         "stdout must stay clean for protocol output"
     );
-    let stderr = String::from_utf8(output.stderr.clone()).expect("stderr should be UTF-8");
+    let stderr = std::str::from_utf8(&output.stderr).expect("stderr should be UTF-8");
     assert!(stderr.contains("Usage:"), "stderr: {stderr}");
 }
 
