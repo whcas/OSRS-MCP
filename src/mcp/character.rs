@@ -19,11 +19,10 @@ use rmcp::{
 use serde::Serialize;
 
 use super::OsrsMcpServer;
-use super::export_output::{
-    EXPORTED_AT_MEANING, ExportFailure, ExportedAtOutput, bounded, bounded_name, into_result,
-    seconds_between, shown_version,
+use super::export_output::{ExportedAtOutput, ObservationTime, bounded, bounded_name};
+use crate::runelite::{
+    CHARACTER_FILE_NAME, CharacterExport, LocalExportSource, Skill, SkillRecord, Warning,
 };
-use crate::runelite::{CharacterExport, ExportReadError, Skill, SkillRecord, Warning};
 
 /// Most skills returned. Real exports have about two dozen.
 const MAX_SKILLS: usize = 64;
@@ -143,37 +142,38 @@ impl OsrsMcpServer {
         output_schema = schema_for_output::<CharacterSummary>()
     )]
     async fn character_summary(&self) -> Result<CallToolResult, ErrorData> {
-        // The read is blocking file I/O, so it stays off the async executor.
-        let source = self.export_source.clone();
-        let read = tokio::task::spawn_blocking(move || source.read_character())
-            .await
-            .map_err(|_| ErrorData::internal_error("the export read task failed", None))?;
-
-        // One clock sample, taken after the read, serves both `read_at` and the age.
-        let outcome = read
-            .map(|export| summarise(&export, Timestamp::now()))
-            .map_err(|error| failure_for(&error));
-        into_result(outcome)
+        self.read_export(
+            CHARACTER_FILE_NAME,
+            LocalExportSource::read_character,
+            summarise,
+        )
+        .await
     }
 }
 
 /// Builds the response for a parsed export, read at `read_at`.
 fn summarise(export: &CharacterExport, read_at: Timestamp) -> CharacterSummary {
-    let exported_at = export.exported_at().timestamp();
-    let (plugin_version, plugin_version_suppressed) = shown_version(export.plugin_version());
+    // The timing rules are shared with the other account tools; this response
+    // keeps its own flat field layout.
+    let ObservationTime {
+        exported_at,
+        exported_at_meaning,
+        read_at,
+        seconds_since_last_change,
+        exported_at_in_future,
+        plugin_version,
+        plugin_version_suppressed,
+    } = ObservationTime::new(export.exported_at(), export.plugin_version(), read_at);
     let (warnings, warning_count) = bounded(export.warnings(), MAX_WARNINGS, warning_output);
     let (skills, skill_count) = bounded(export.skills(), MAX_SKILLS, skill_output);
 
     CharacterSummary {
         status: SummaryStatus::Ok,
-        exported_at: ExportedAtOutput {
-            text: export.exported_at().text().to_owned(),
-            utc: exported_at.to_string(),
-        },
-        exported_at_meaning: EXPORTED_AT_MEANING.to_owned(),
-        read_at: read_at.to_string(),
-        seconds_since_last_change: seconds_between(exported_at, read_at),
-        exported_at_in_future: exported_at > read_at,
+        exported_at,
+        exported_at_meaning,
+        read_at,
+        seconds_since_last_change,
+        exported_at_in_future,
         plugin_version,
         plugin_version_suppressed,
         skills_truncated: skill_count > skills.len(),
@@ -213,18 +213,15 @@ fn warning_output(warning: &Warning) -> WarningOutput {
     }
 }
 
-/// Maps a read failure to the fixed failure for `character.json`.
-fn failure_for(error: &ExportReadError) -> ExportFailure {
-    super::export_output::failure_for(error, "character.json")
-}
-
 #[cfg(test)]
 mod tests {
     use std::io;
 
-    use super::super::export_output::{FailureStatus, MAX_NAME_CHARS, UnreadableReason};
+    use super::super::export_output::{
+        ExportFailure, FailureStatus, MAX_NAME_CHARS, UnreadableReason, failure_for, shown_version,
+    };
     use super::*;
-    use crate::runelite::{CharacterParseError, parse_character_export};
+    use crate::runelite::{CharacterParseError, ExportReadError, parse_character_export};
 
     const SYNTHETIC_EXPORT: &[u8] =
         include_bytes!("../../tests/fixtures/runelite_export/character.synthetic.json");
@@ -459,7 +456,7 @@ mod tests {
     }
 
     fn failure(error: &ExportReadError) -> ExportFailure {
-        failure_for(error)
+        failure_for(error, CHARACTER_FILE_NAME)
     }
 
     #[test]

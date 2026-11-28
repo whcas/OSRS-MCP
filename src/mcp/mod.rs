@@ -150,34 +150,17 @@ type Cause = Box<dyn std::error::Error + Send + Sync>;
 
 /// Failure while running the MCP server. The underlying cause is available
 /// through [`std::error::Error::source`].
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ServeError {
     /// The server could not be configured, so it never started.
-    Configuration(Cause),
+    #[error("MCP server could not be configured")]
+    Configuration(#[source] Cause),
     /// The MCP initialization handshake failed.
-    Initialize(Cause),
+    #[error("MCP initialization failed")]
+    Initialize(#[source] Cause),
     /// The connection ended abnormally after initialization.
-    Connection(Cause),
-}
-
-impl std::fmt::Display for ServeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Configuration(_) => "MCP server could not be configured",
-            Self::Initialize(_) => "MCP initialization failed",
-            Self::Connection(_) => "MCP connection failed",
-        })
-    }
-}
-
-impl std::error::Error for ServeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Configuration(cause) | Self::Initialize(cause) | Self::Connection(cause) => {
-                Some(cause.as_ref())
-            }
-        }
-    }
+    #[error("MCP connection failed")]
+    Connection(#[source] Cause),
 }
 
 async fn serve<T, E, A>(server: OsrsMcpServer, transport: T) -> Result<(), ServeError>
@@ -194,4 +177,32 @@ where
         .await
         .map(|_| ())
         .map_err(|error| ServeError::Connection(Box::new(error)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::*;
+
+    fn cause() -> Cause {
+        Box::new(std::io::Error::other("pipe closed"))
+    }
+
+    #[test]
+    fn each_serve_error_has_its_own_message_and_exposes_its_cause() {
+        let errors = [
+            (
+                ServeError::Configuration(cause()),
+                "MCP server could not be configured",
+            ),
+            (ServeError::Initialize(cause()), "MCP initialization failed"),
+            (ServeError::Connection(cause()), "MCP connection failed"),
+        ];
+        for (error, message) in errors {
+            assert_eq!(error.to_string(), message);
+            let source = error.source().expect("every variant keeps its cause");
+            assert_eq!(source.to_string(), "pipe closed");
+        }
+    }
 }

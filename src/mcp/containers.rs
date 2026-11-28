@@ -18,12 +18,10 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 
 use super::OsrsMcpServer;
-use super::export_output::{
-    ExportFailure, ObservationTime, bounded, bounded_name, failure_for, into_result,
-};
+use super::export_output::{ObservationTime, Page, bounded, bounded_name};
 use crate::domain::ItemId;
 use crate::runelite::{
-    ContainerKind, ContainerRow, ContainerSnapshot, ContainerWarning, ExportReadError,
+    ContainerKind, ContainerRow, ContainerSnapshot, ContainerWarning, container_file_name,
 };
 
 /// Rows returned when `limit` is not given.
@@ -53,13 +51,6 @@ struct BankInput {
     item_ids: Option<Vec<u32>>,
 }
 
-/// A validated page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Page {
-    offset: usize,
-    limit: usize,
-}
-
 /// A validated request: which rows, then which page of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Query {
@@ -70,22 +61,9 @@ struct Query {
 
 impl BankInput {
     fn into_query(self) -> Result<Query, String> {
-        let limit = match self.limit {
-            None => DEFAULT_LIMIT,
-            Some(limit) => usize::try_from(limit)
-                .ok()
-                .filter(|limit| (1..=MAX_LIMIT).contains(limit))
-                .ok_or_else(|| format!("limit must be between 1 and {MAX_LIMIT}"))?,
-        };
-        let offset = self
-            .offset
-            .map_or(Ok(0), usize::try_from)
-            .map_err(|_| "offset is too large".to_owned())?;
+        let page = Page::from_arguments(self.offset, self.limit, DEFAULT_LIMIT, MAX_LIMIT)?;
         let item_ids = self.item_ids.map(distinct_item_ids).transpose()?;
-        Ok(Query {
-            page: Page { offset, limit },
-            item_ids,
-        })
+        Ok(Query { page, item_ids })
     }
 }
 
@@ -284,28 +262,19 @@ impl OsrsMcpServer {
 }
 
 impl OsrsMcpServer {
-    /// Reads one container off the async executor and builds the tool result.
+    /// Reads one container and builds the tool result.
     async fn container_result(
         &self,
         kind: ContainerKind,
         query: Query,
     ) -> Result<CallToolResult, ErrorData> {
-        let source = self.export_source.clone();
-        let read = tokio::task::spawn_blocking(move || source.read_container(kind))
-            .await
-            .map_err(|_| ErrorData::internal_error("the export read task failed", None))?;
-
-        // One clock sample, taken after the read, serves both `read_at` and the age.
-        let outcome = read
-            .map(|snapshot| contents(&snapshot, &query, Timestamp::now()))
-            .map_err(|error| container_failure(&error, kind));
-        into_result(outcome)
+        self.read_export(
+            container_file_name(kind),
+            move |source| source.read_container(kind),
+            |snapshot, read_at| contents(snapshot, &query, read_at),
+        )
+        .await
     }
-}
-
-/// The fixed failure for `kind`, naming its file.
-fn container_failure(error: &ExportReadError, kind: ContainerKind) -> ExportFailure {
-    failure_for(error, crate::runelite::container_file_name(kind))
 }
 
 /// Builds the response for a parsed snapshot, read at `read_at`.
@@ -315,18 +284,13 @@ fn contents(snapshot: &ContainerSnapshot, query: &Query, read_at: Timestamp) -> 
     // on a later page can never be reported as absent.
     let matching = matching_rows(snapshot.rows(), query.item_ids.as_deref());
     let page = query.page;
-    let shown: Vec<ContainerRowOutput> = matching
-        .iter()
-        .skip(page.offset)
-        .take(page.limit)
-        .map(|row| row_output(row))
-        .collect();
+    let (shown, truncated) = page.select(&matching, |row| row_output(row));
 
     ContainerContents {
         status: ContentsStatus::Ok,
         container: container_output(snapshot.kind()),
         observed: ObservationTime::new(snapshot.exported_at(), snapshot.plugin_version(), read_at),
-        truncated: page.offset.saturating_add(shown.len()) < matching.len(),
+        truncated,
         rows: shown,
         total_rows: matching.len(),
         snapshot_rows: snapshot.rows().len(),
@@ -394,8 +358,9 @@ const fn warning_output(warning: &ContainerWarning) -> ContainerWarningOutput {
 
 #[cfg(test)]
 mod tests {
+    use super::super::export_output::failure_for;
     use super::*;
-    use crate::runelite::parse_container_export;
+    use crate::runelite::{ExportReadError, parse_container_export};
 
     const BANK: &[u8] = include_bytes!("../../tests/fixtures/runelite_export/bank.synthetic.json");
 
@@ -734,7 +699,10 @@ mod tests {
 
     #[test]
     fn failures_name_the_requested_file_and_never_a_path() {
-        let failure = container_failure(&ExportReadError::FileNotFound, ContainerKind::Bank);
+        let failure = failure_for(
+            &ExportReadError::FileNotFound,
+            container_file_name(ContainerKind::Bank),
+        );
 
         assert!(failure.message.contains("bank.json"), "{}", failure.message);
     }
@@ -763,7 +731,10 @@ mod tests {
 
     #[test]
     fn equipment_failures_name_the_equipment_file() {
-        let failure = container_failure(&ExportReadError::FileNotFound, ContainerKind::Equipment);
+        let failure = failure_for(
+            &ExportReadError::FileNotFound,
+            container_file_name(ContainerKind::Equipment),
+        );
 
         assert!(
             failure.message.contains("equipment.json"),

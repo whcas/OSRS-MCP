@@ -3,17 +3,17 @@
 use std::collections::HashSet;
 
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use thiserror::Error;
 
 use super::ExportedAt;
+use super::envelope::{EnvelopeError, Fields, decode_object, read_envelope, required};
 
 /// Largest quest export accepted, in bytes.
 pub const MAX_QUEST_EXPORT_BYTES: usize = 1024 * 1024;
 /// Largest number of rows accepted in a quest export.
 pub const MAX_QUEST_ROWS: usize = 1_024;
 
-const MAX_ENVELOPE_TEXT_BYTES: usize = 128;
 const MAX_QUEST_NAME_BYTES: usize = 256;
 
 /// A quest identifier from the `RuneLite` client, with its own namespace.
@@ -154,8 +154,6 @@ impl QuestParseError {
     }
 }
 
-type Fields = Map<String, Value>;
-
 /// Parses one `quests.json` export, without file or network access.
 ///
 /// Display names may be at most 256 UTF-8 bytes. The timestamp and optional
@@ -167,53 +165,30 @@ type Fields = Map<String, Value>;
 /// summary disagreement or nonempty all-not-started snapshot is reported as
 /// a warning.
 pub fn parse_quest_export(bytes: &[u8]) -> Result<QuestProgress, QuestParseError> {
-    let input = decode_json(bytes)?;
-    let fields = input.as_object().ok_or(QuestParseError::UnexpectedShape)?;
-    let (exported_at, plugin_version) = read_envelope(fields)?;
-    let quests = read_quest_list(fields)?;
+    let fields = decode_object(bytes, MAX_QUEST_EXPORT_BYTES)?;
+    let envelope = read_envelope(&fields)?;
+    let quests = read_quest_list(&fields)?;
     let summary = fields.get("summary").map(read_summary).transpose()?;
     let warnings = warnings_for(&quests, summary.as_ref());
     Ok(QuestProgress {
-        exported_at,
-        plugin_version,
+        exported_at: envelope.exported_at,
+        plugin_version: envelope.plugin_version,
         quests,
         warnings,
     })
 }
 
-/// Bounds the input and decodes it, separating a premature end from other
-/// syntax errors.
-fn decode_json(bytes: &[u8]) -> Result<Value, QuestParseError> {
-    if bytes.len() > MAX_QUEST_EXPORT_BYTES {
-        return Err(QuestParseError::InputTooLarge);
+impl From<EnvelopeError> for QuestParseError {
+    fn from(error: EnvelopeError) -> Self {
+        match error {
+            EnvelopeError::InputTooLarge => Self::InputTooLarge,
+            EnvelopeError::Truncated => Self::Truncated,
+            EnvelopeError::InvalidJson => Self::InvalidJson,
+            EnvelopeError::UnexpectedShape => Self::UnexpectedShape,
+            EnvelopeError::MissingField { field } => Self::MissingField { field },
+            EnvelopeError::InvalidField { field } => Self::InvalidField { field },
+        }
     }
-    serde_json::from_slice(bytes).map_err(|error| {
-        if error.is_eof() {
-            QuestParseError::Truncated
-        } else {
-            QuestParseError::InvalidJson
-        }
-    })
-}
-
-fn read_envelope(fields: &Fields) -> Result<(ExportedAt, Option<String>), QuestParseError> {
-    let exported_at = required(fields, "exported_at")?
-        .as_str()
-        .filter(|text| text.len() <= MAX_ENVELOPE_TEXT_BYTES)
-        .and_then(ExportedAt::parse)
-        .ok_or(QuestParseError::InvalidField {
-            field: "exported_at",
-        })?;
-    let plugin_version = match fields.get("plugin_version") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(text)) if text.len() <= MAX_ENVELOPE_TEXT_BYTES => Some(text.clone()),
-        Some(_) => {
-            return Err(QuestParseError::InvalidField {
-                field: "plugin_version",
-            });
-        }
-    };
-    Ok((exported_at, plugin_version))
 }
 
 fn read_quest_list(fields: &Fields) -> Result<Vec<QuestRecord>, QuestParseError> {
@@ -221,12 +196,6 @@ fn read_quest_list(fields: &Fields) -> Result<Vec<QuestRecord>, QuestParseError>
         .as_array()
         .ok_or(QuestParseError::InvalidField { field: "quests" })?;
     read_quests(rows)
-}
-
-fn required<'a>(fields: &'a Fields, field: &'static str) -> Result<&'a Value, QuestParseError> {
-    fields
-        .get(field)
-        .ok_or(QuestParseError::MissingField { field })
 }
 
 fn read_quests(rows: &[Value]) -> Result<Vec<QuestRecord>, QuestParseError> {
@@ -458,5 +427,46 @@ mod tests {
         input.as_object_mut().unwrap().remove("summary");
         input["quests"][1] = json!([]);
         assert_eq!(parse(&input), Err(QuestParseError::InvalidRow { row: 2 }));
+    }
+
+    #[test]
+    fn the_envelope_timestamp_and_plugin_version_are_validated() {
+        let mut input = export();
+        let plugin_version =
+            |input: &Value| parse(input).map(|parsed| parsed.plugin_version().map(str::len));
+        let error = |input: &Value| parse(input).err();
+
+        input["plugin_version"] = json!("v".repeat(128));
+        assert_eq!(plugin_version(&input), Ok(Some(128)));
+        for invalid in [json!("v".repeat(129)), json!(7)] {
+            input["plugin_version"] = invalid;
+            assert_eq!(
+                error(&input),
+                Some(QuestParseError::InvalidField {
+                    field: "plugin_version"
+                })
+            );
+        }
+        input["plugin_version"] = Value::Null;
+        assert_eq!(plugin_version(&input), Ok(None));
+        input.as_object_mut().unwrap().remove("plugin_version");
+        assert_eq!(plugin_version(&input), Ok(None));
+
+        // With both invalid, `exported_at` is the one reported.
+        input["exported_at"] = json!("yesterday");
+        input["plugin_version"] = json!(7);
+        assert_eq!(
+            error(&input),
+            Some(QuestParseError::InvalidField {
+                field: "exported_at"
+            })
+        );
+        input.as_object_mut().unwrap().remove("exported_at");
+        assert_eq!(
+            error(&input),
+            Some(QuestParseError::MissingField {
+                field: "exported_at"
+            })
+        );
     }
 }

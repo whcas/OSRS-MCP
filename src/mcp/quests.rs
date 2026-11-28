@@ -20,11 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use super::OsrsMcpServer;
 use super::containers::ContentsStatus;
-use super::export_output::{
-    ExportFailure, ObservationTime, bounded, bounded_name_to, failure_for, into_result,
-};
+use super::export_output::{ObservationTime, Page, bounded, bounded_name_to};
 use crate::runelite::{
-    ExportReadError, QUEST_FILE_NAME, QuestProgress, QuestRecord, QuestState, QuestWarning,
+    LocalExportSource, QUEST_FILE_NAME, QuestProgress, QuestRecord, QuestState, QuestWarning,
 };
 
 /// Quests returned when `limit` is not given.
@@ -77,27 +75,15 @@ struct QuestStatusInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Query {
     state: Option<QuestStateOutput>,
-    offset: usize,
-    limit: usize,
+    page: Page,
 }
 
 impl QuestStatusInput {
     fn into_query(self) -> Result<Query, String> {
-        let limit = match self.limit {
-            None => DEFAULT_LIMIT,
-            Some(limit) => usize::try_from(limit)
-                .ok()
-                .filter(|limit| (1..=MAX_LIMIT).contains(limit))
-                .ok_or_else(|| format!("limit must be between 1 and {MAX_LIMIT}"))?,
-        };
-        let offset = self
-            .offset
-            .map_or(Ok(0), usize::try_from)
-            .map_err(|_| "offset is too large".to_owned())?;
+        let page = Page::from_arguments(self.offset, self.limit, DEFAULT_LIMIT, MAX_LIMIT)?;
         Ok(Query {
             state: self.state,
-            offset,
-            limit,
+            page,
         })
     }
 }
@@ -208,23 +194,13 @@ impl OsrsMcpServer {
             .into_query()
             .map_err(|message| ErrorData::invalid_params(message, None))?;
 
-        // The read is blocking file I/O, so it stays off the async executor.
-        let source = self.export_source.clone();
-        let read = tokio::task::spawn_blocking(move || source.read_quests())
-            .await
-            .map_err(|_| ErrorData::internal_error("the export read task failed", None))?;
-
-        // One clock sample, taken after the read, serves both `read_at` and the age.
-        let outcome = read
-            .map(|progress| quest_status(&progress, &query, Timestamp::now()))
-            .map_err(|error| quest_failure(&error));
-        into_result(outcome)
+        self.read_export(
+            QUEST_FILE_NAME,
+            LocalExportSource::read_quests,
+            |progress, read_at| quest_status(progress, &query, read_at),
+        )
+        .await
     }
-}
-
-/// The fixed failure for `quests.json`.
-fn quest_failure(error: &ExportReadError) -> ExportFailure {
-    failure_for(error, QUEST_FILE_NAME)
 }
 
 /// Builds the response for a parsed export, read at `read_at`.
@@ -239,12 +215,7 @@ fn quest_status(progress: &QuestProgress, query: &Query, read_at: Timestamp) -> 
                 .is_none_or(|state| QuestStateOutput::from(quest.state) == state)
         })
         .collect();
-    let shown: Vec<QuestOutput> = matching
-        .iter()
-        .skip(query.offset)
-        .take(query.limit)
-        .map(|quest| quest_output(quest))
-        .collect();
+    let (shown, truncated) = query.page.select(&matching, |quest| quest_output(quest));
     let (warnings, _) = bounded(progress.warnings(), MAX_WARNINGS, |warning| {
         warning_output(*warning)
     });
@@ -253,11 +224,11 @@ fn quest_status(progress: &QuestProgress, query: &Query, read_at: Timestamp) -> 
         status: ContentsStatus::Ok,
         observed: ObservationTime::new(progress.exported_at(), progress.plugin_version(), read_at),
         counts: counts(quests),
-        truncated: query.offset.saturating_add(shown.len()) < matching.len(),
+        truncated,
         quests: shown,
         matched: matching.len(),
-        offset: query.offset,
-        limit: query.limit,
+        offset: query.page.offset,
+        limit: query.page.limit,
         warnings,
     }
 }
@@ -291,8 +262,9 @@ const fn warning_output(warning: QuestWarning) -> QuestWarningOutput {
 
 #[cfg(test)]
 mod tests {
+    use super::super::export_output::failure_for;
     use super::*;
-    use crate::runelite::parse_quest_export;
+    use crate::runelite::{ExportReadError, parse_quest_export};
 
     const SYNTHETIC: &[u8] =
         include_bytes!("../../tests/fixtures/runelite_export/quests.synthetic.json");
@@ -304,8 +276,7 @@ mod tests {
     fn browse(offset: usize, limit: usize) -> Query {
         Query {
             state: None,
-            offset,
-            limit,
+            page: Page { offset, limit },
         }
     }
 
@@ -373,8 +344,10 @@ mod tests {
         let progress = export_of("FFINNNF", None);
         let query = Query {
             state: Some(QuestStateOutput::Finished),
-            offset: 1,
-            limit: 1,
+            page: Page {
+                offset: 1,
+                limit: 1,
+            },
         };
 
         let result = quest_status(&progress, &query, ts("2026-01-01T12:00:00Z"));
@@ -397,8 +370,7 @@ mod tests {
         let now = ts("2026-01-01T12:00:00Z");
         let finished = |offset, limit| Query {
             state: Some(QuestStateOutput::Finished),
-            offset,
-            limit,
+            page: Page { offset, limit },
         };
 
         let first = quest_status(&progress, &finished(0, 2), now);
@@ -421,8 +393,10 @@ mod tests {
         let progress = export_of("FF", None);
         let query = Query {
             state: Some(QuestStateOutput::InProgress),
-            offset: 0,
-            limit: 10,
+            page: Page {
+                offset: 0,
+                limit: 10,
+            },
         };
 
         let result = quest_status(&progress, &query, ts("2026-01-01T12:00:00Z"));
@@ -549,15 +523,17 @@ mod tests {
             at_max.into_query(),
             Ok(Query {
                 state: Some(QuestStateOutput::NotStarted),
-                offset: 3,
-                limit: MAX_LIMIT
+                page: Page {
+                    offset: 3,
+                    limit: MAX_LIMIT
+                }
             })
         );
     }
 
     #[test]
     fn failures_name_quests_json_and_never_a_path() {
-        let failure = quest_failure(&ExportReadError::FileNotFound);
+        let failure = failure_for(&ExportReadError::FileNotFound, QUEST_FILE_NAME);
 
         assert!(
             failure.message.contains("quests.json"),

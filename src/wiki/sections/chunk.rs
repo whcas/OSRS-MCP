@@ -232,7 +232,7 @@ fn push_line(
     }
     let mut start = line.start;
     while start < line.end {
-        let end = floor_char_boundary(text, (start + max_bytes).min(line.end));
+        let end = text.floor_char_boundary((start + max_bytes).min(line.end));
         let before = if start == line.start {
             before
         } else {
@@ -262,15 +262,6 @@ fn join_caveats(pieces: Vec<Piece>, max_bytes: usize) -> Vec<Piece> {
         }
     }
     joined
-}
-
-/// The largest character boundary at or before `index`. The bound is at least
-/// four bytes, so this always moves forward.
-fn floor_char_boundary(text: &str, index: usize) -> usize {
-    (0..=index)
-        .rev()
-        .find(|&candidate| text.is_char_boundary(candidate))
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

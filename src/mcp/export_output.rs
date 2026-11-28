@@ -10,7 +10,8 @@ use rmcp::{
 };
 use serde::Serialize;
 
-use crate::runelite::{ExportReadError, ExportedAt};
+use super::OsrsMcpServer;
+use crate::runelite::{ExportReadError, ExportedAt, LocalExportSource};
 
 /// Longest display name returned, in characters. Names come from the export
 /// and are untrusted.
@@ -135,6 +136,34 @@ pub struct ExportFailure {
     pub detail: Option<String>,
 }
 
+impl OsrsMcpServer {
+    /// Reads one export file and builds the tool result from it.
+    ///
+    /// `read` runs on a blocking thread, since it is file I/O. `build` then
+    /// receives the parsed export and the time of reading: a single clock
+    /// sample taken after the read serves both `read_at` and the age. A read
+    /// failure becomes the fixed failure for `file`.
+    pub(super) async fn read_export<T, O>(
+        &self,
+        file: &'static str,
+        read: impl FnOnce(&LocalExportSource) -> Result<T, ExportReadError> + Send + 'static,
+        build: impl FnOnce(&T, Timestamp) -> O + Send,
+    ) -> Result<CallToolResult, ErrorData>
+    where
+        T: Send + 'static,
+        O: Serialize,
+    {
+        let source = self.export_source.clone();
+        let read = tokio::task::spawn_blocking(move || read(&source))
+            .await
+            .map_err(|_| ErrorData::internal_error("the export read task failed", None))?;
+        let outcome = read
+            .map(|export| build(&export, Timestamp::now()))
+            .map_err(|error| failure_for(&error, file));
+        into_result(outcome)
+    }
+}
+
 /// Serialises the outcome. A failure is an error result whose text is the
 /// failure as JSON, with no structured content, so it need not match the
 /// success output schema.
@@ -149,6 +178,51 @@ pub(super) fn into_result<T: Serialize>(
         Err(failure) => serde_json::to_string(&failure)
             .map(|text| CallToolResult::error(vec![ContentBlock::text(text)]))
             .map_err(internal),
+    }
+}
+
+/// A validated window onto a list of results: how many to skip, then how many
+/// to return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Page {
+    pub(super) offset: usize,
+    pub(super) limit: usize,
+}
+
+impl Page {
+    /// Validates the `offset` and `limit` arguments of a paged tool. A missing
+    /// `limit` is `default_limit`; one outside `1..=max_limit` is rejected.
+    pub(super) fn from_arguments(
+        offset: Option<u32>,
+        limit: Option<u32>,
+        default_limit: usize,
+        max_limit: usize,
+    ) -> Result<Self, String> {
+        let limit = match limit {
+            None => default_limit,
+            Some(limit) => usize::try_from(limit)
+                .ok()
+                .filter(|limit| (1..=max_limit).contains(limit))
+                .ok_or_else(|| format!("limit must be between 1 and {max_limit}"))?,
+        };
+        let offset = offset
+            .map_or(Ok(0), usize::try_from)
+            .map_err(|_| "offset is too large".to_owned())?;
+        Ok(Self { offset, limit })
+    }
+
+    /// The items of this page mapped, and whether more matching items follow
+    /// it. `matching` is everything the caller's filter kept, so an offset
+    /// past its end is an empty page, not an error.
+    pub(super) fn select<T, U>(self, matching: &[T], map: impl Fn(&T) -> U) -> (Vec<U>, bool) {
+        let shown: Vec<U> = matching
+            .iter()
+            .skip(self.offset)
+            .take(self.limit)
+            .map(map)
+            .collect();
+        let truncated = self.offset.saturating_add(shown.len()) < matching.len();
+        (shown, truncated)
     }
 }
 
@@ -263,5 +337,46 @@ pub(super) fn failure_for(error: &ExportReadError, file: &str) -> ExportFailure 
                 ..failure(FailureStatus::InvalidExport, &message)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_arguments_default_and_are_bounded_with_a_fixed_message() {
+        assert_eq!(
+            Page::from_arguments(None, None, 100, 200),
+            Ok(Page {
+                offset: 0,
+                limit: 100
+            })
+        );
+        assert_eq!(
+            Page::from_arguments(Some(3), Some(200), 100, 200),
+            Ok(Page {
+                offset: 3,
+                limit: 200
+            })
+        );
+        for limit in [0, 201, u32::MAX] {
+            assert_eq!(
+                Page::from_arguments(None, Some(limit), 100, 200),
+                Err("limit must be between 1 and 200".to_owned()),
+                "limit {limit}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_page_reports_whether_matching_items_follow_it() {
+        let items = [1, 2, 3, 4, 5];
+        let page = |offset, limit| Page { offset, limit };
+
+        assert_eq!(page(0, 2).select(&items, |n| *n), (vec![1, 2], true));
+        assert_eq!(page(3, 2).select(&items, |n| *n), (vec![4, 5], false));
+        assert_eq!(page(4, 10).select(&items, |n| *n), (vec![5], false));
+        assert_eq!(page(9, 2).select(&items, |n| *n), (vec![], false));
     }
 }

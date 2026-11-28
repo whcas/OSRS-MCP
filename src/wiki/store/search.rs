@@ -25,8 +25,9 @@ use rusqlite::params;
 use thiserror::Error;
 
 use super::{
-    Operation, PageId, PageTitle, RevisionId, RevisionTimestamp, SourceId, Store, StoreError,
-    StoredChunk, chunk_row, find_source, stored_chunk,
+    ChunkColumns, Operation, PageId, PageTitle, RevisionId, RevisionTimestamp, SourceId, Store,
+    StoreError, StoredChunk, find_source, stored_chunk, stored_page_id, stored_revision_id,
+    stored_revision_time, stored_title,
 };
 
 /// The longest query text accepted, in bytes.
@@ -182,13 +183,13 @@ impl Store {
         let limit = i64::try_from(query.limit).map_err(|_| StoreError::IdentifierTooLarge)?;
         let rows = statement
             .query_map(params![query.expression, source_key, limit], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    chunk_row(row, 4)?,
-                ))
+                Ok(HitColumns {
+                    page_id: row.get(0)?,
+                    title: row.get(1)?,
+                    revision_id: row.get(2)?,
+                    revision_time: row.get(3)?,
+                    chunk: ChunkColumns::read(row, 4)?,
+                })
             })
             .map_err(StoreError::database(Operation::Read))?;
         rows.map(|row| hit(row.map_err(StoreError::database(Operation::Read))?))
@@ -196,23 +197,22 @@ impl Store {
     }
 }
 
-type HitRow = (i64, String, i64, String, super::ChunkRow);
+/// The columns of one search result, as stored and not yet checked.
+struct HitColumns {
+    page_id: i64,
+    title: String,
+    revision_id: i64,
+    revision_time: String,
+    chunk: ChunkColumns,
+}
 
-fn hit(row: HitRow) -> Result<SearchHit, StoreError> {
-    let (page, title, revision, time, chunk) = row;
-    let invalid = |what| StoreError::Corrupt { what };
+fn hit(columns: HitColumns) -> Result<SearchHit, StoreError> {
     Ok(SearchHit {
-        page: u64::try_from(page)
-            .ok()
-            .and_then(PageId::new)
-            .ok_or_else(|| invalid("page id"))?,
-        title: PageTitle::new(title).ok_or_else(|| invalid("title"))?,
-        revision: u64::try_from(revision)
-            .ok()
-            .and_then(RevisionId::new)
-            .ok_or_else(|| invalid("revision id"))?,
-        timestamp: RevisionTimestamp::parse(&time).map_err(|_| invalid("revision time"))?,
-        chunk: stored_chunk(chunk)?,
+        page: stored_page_id(columns.page_id)?,
+        title: stored_title(columns.title, "title")?,
+        revision: stored_revision_id(columns.revision_id)?,
+        timestamp: stored_revision_time(&columns.revision_time)?,
+        chunk: stored_chunk(columns.chunk)?,
     })
 }
 
