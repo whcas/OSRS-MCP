@@ -2,34 +2,16 @@
 //! server over an in-memory pipe, reading original synthetic exports from
 //! temporary directories. No private export, process or network is involved.
 
-use std::fs;
+mod common;
 
-use osrs_mcp::mcp::OsrsMcpServer;
+use common::{Client, connect, failure_json, source_in};
 use osrs_mcp::runelite::{LocalExportSource, QUEST_FILE_NAME};
-use rmcp::{
-    ServiceExt,
-    model::{CallToolRequestParams, CallToolResult},
-    service::{RoleClient, RunningService},
-};
+use rmcp::model::{CallToolRequestParams, CallToolResult};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use tokio::task::JoinHandle;
 
-type Client = RunningService<RoleClient, ()>;
-
-async fn connect(source: LocalExportSource) -> (Client, JoinHandle<()>) {
-    let (client_io, server_io) = tokio::io::duplex(65536);
-    let server = tokio::spawn(async move {
-        let running = OsrsMcpServer::new()
-            .expect("server should be configured")
-            .with_export_source(source)
-            .serve(server_io)
-            .await
-            .expect("server should initialise");
-        running.waiting().await.expect("clean shutdown");
-    });
-    let client = ().serve(client_io).await.expect("client should initialise");
-    (client, server)
+fn source_with(content: &str) -> (TempDir, LocalExportSource) {
+    source_in("osrs-mcp-quests-", QUEST_FILE_NAME, content)
 }
 
 async fn call(client: &Client, arguments: Value) -> CallToolResult {
@@ -38,23 +20,6 @@ async fn call(client: &Client, arguments: Value) -> CallToolResult {
         .call_tool(CallToolRequestParams::new("quest_status").with_arguments(arguments))
         .await
         .expect("quest_status should be callable")
-}
-
-fn source_with(content: &str) -> (TempDir, LocalExportSource) {
-    let dir = TempDir::with_prefix("osrs-mcp-quests-").unwrap();
-    fs::write(dir.path().join(QUEST_FILE_NAME), content).unwrap();
-    let source = LocalExportSource::new(dir.path().to_path_buf());
-    (dir, source)
-}
-
-fn failure_json(result: &CallToolResult) -> Value {
-    assert_eq!(result.is_error, Some(true), "result: {result:?}");
-    assert!(
-        result.structured_content.is_none(),
-        "failures must not carry structured content"
-    );
-    let text = &result.content[0].as_text().expect("failure text").text;
-    serde_json::from_str(text).expect("failure text is JSON")
 }
 
 /// The state of synthetic quest `id` in the large export.
