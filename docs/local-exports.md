@@ -97,3 +97,12 @@ Read-only. Reads `quests.json` on each call. Input (all optional): `state` (`fin
 - No account name, world, session id, path or raw JSON.
 
 Failures use the same fixed statuses as `character_summary`, with messages naming `quests.json`.
+
+## The `inventory_contents` tool
+
+Read-only, no input. Reads `inventory.json` on each call and returns the same row shape, timing fields, warnings and failure statuses as `bank_contents`.
+
+- **At most 28 rows**, the size of the game's inventory. The shared container parser accepts many more rows, so this tool bounds its own output: if the file lists more than 28 rows, the first 28 are returned in file order with `truncated: true`, and `total_rows` and `snapshot_rows` give the full count. Nothing is dropped silently.
+- An observed empty inventory is `status: ok` with no rows. A missing `inventory.json` is `file_not_found`, never "empty inventory".
+- The exporter throttles inventory writes to one per five seconds and does not reschedule a dropped one, so the file can be one change behind the game. `exported_at` is the file's own time of last change; the tool does not claim to show the current inventory, and it is not guaranteed consistent with the bank or equipment files.
+- No prices, valuation or totals; no account name, world, session id, path or raw JSON.

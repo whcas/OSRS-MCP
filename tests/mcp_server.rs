@@ -63,6 +63,7 @@ async fn tool_discovery_lists_only_described_read_only_tools_including_server_in
             "calculate_profit",
             "character_summary",
             "equipment_contents",
+            "inventory_contents",
             "item_prices",
             "item_search",
             "quest_status",
