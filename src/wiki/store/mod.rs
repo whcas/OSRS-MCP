@@ -597,60 +597,61 @@ fn parse_losses(text: &str) -> Result<Vec<Loss>, StoreError> {
         .collect()
 }
 
-type PageRow = (
-    i64,
-    i64,
-    String,
-    i64,
-    String,
-    Option<String>,
-    Option<String>,
-    String,
-);
+/// The `page` columns that are read back, as stored and not yet checked.
+struct PageColumns {
+    page_id: i64,
+    namespace: i64,
+    title: String,
+    revision_id: i64,
+    revision_time: String,
+    hash: Option<String>,
+    redirect_target: Option<String>,
+    text: String,
+}
 
 fn read_page(
     connection: &Connection,
     source_key: i64,
     id: PageId,
 ) -> Result<Option<StoredPage>, StoreError> {
-    let row: Option<PageRow> = connection
+    let columns: Option<PageColumns> = connection
         .query_row(
             "SELECT page_id, namespace, title, revision_id, revision_time, hash,
                     redirect_target, text
              FROM page WHERE source_id = ?1 AND page_id = ?2",
             params![source_key, id_to_sql(id.get())?],
             |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                ))
+                Ok(PageColumns {
+                    page_id: row.get(0)?,
+                    namespace: row.get(1)?,
+                    title: row.get(2)?,
+                    revision_id: row.get(3)?,
+                    revision_time: row.get(4)?,
+                    hash: row.get(5)?,
+                    redirect_target: row.get(6)?,
+                    text: row.get(7)?,
+                })
             },
         )
         .optional()
         .map_err(StoreError::database(Operation::Read))?;
-    row.map(stored_page).transpose()
+    columns.map(stored_page).transpose()
 }
 
-fn stored_page(row: PageRow) -> Result<StoredPage, StoreError> {
-    let (page_id, namespace, title, revision, time, hash, redirect, text) = row;
+fn stored_page(columns: PageColumns) -> Result<StoredPage, StoreError> {
     Ok(StoredPage {
-        id: stored_page_id(page_id)?,
-        namespace: u32::try_from(namespace)
+        id: stored_page_id(columns.page_id)?,
+        namespace: u32::try_from(columns.namespace)
             .map_err(|_| StoreError::Corrupt { what: "namespace" })?,
-        title: stored_title(title, "title")?,
-        revision: stored_revision_id(revision)?,
-        timestamp: stored_revision_time(&time)?,
-        hash,
-        redirect_target: redirect
+        title: stored_title(columns.title, "title")?,
+        revision: stored_revision_id(columns.revision_id)?,
+        timestamp: stored_revision_time(&columns.revision_time)?,
+        hash: columns.hash,
+        redirect_target: columns
+            .redirect_target
             .map(|target| stored_title(target, "redirect target"))
             .transpose()?,
-        text,
+        text: columns.text,
     })
 }
 
@@ -686,20 +687,21 @@ fn stored_title(text: String, what: &'static str) -> Result<PageTitle, StoreErro
     PageTitle::new(text).ok_or(StoreError::Corrupt { what })
 }
 
-type ChunkRow = (
-    i64,
-    i64,
-    String,
-    i64,
-    i64,
-    i64,
-    i64,
-    String,
-    String,
-    String,
-    String,
-    String,
-);
+/// The `chunk` columns that are read back, as stored and not yet checked.
+struct ChunkColumns {
+    section_index: i64,
+    chunk_index: i64,
+    section_path: String,
+    section_occurrence: i64,
+    section_level: i64,
+    source_start: i64,
+    source_end: i64,
+    kind: String,
+    losses: String,
+    templates: String,
+    link_targets: String,
+    text: String,
+}
 
 fn read_chunks(
     connection: &Connection,
@@ -716,49 +718,50 @@ fn read_chunks(
         .map_err(StoreError::database(Operation::Read))?;
     let rows = statement
         .query_map(params![source_key, id_to_sql(id.get())?], |row| {
-            chunk_row(row, 0)
+            ChunkColumns::read(row, 0)
         })
         .map_err(StoreError::database(Operation::Read))?;
     rows.map(|row| stored_chunk(row.map_err(StoreError::database(Operation::Read))?))
         .collect()
 }
 
-/// Reads the twelve chunk columns in the order of [`ChunkRow`], starting at
-/// column `first`.
-fn chunk_row(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<ChunkRow> {
-    Ok((
-        row.get(first)?,
-        row.get(first + 1)?,
-        row.get(first + 2)?,
-        row.get(first + 3)?,
-        row.get(first + 4)?,
-        row.get(first + 5)?,
-        row.get(first + 6)?,
-        row.get(first + 7)?,
-        row.get(first + 8)?,
-        row.get(first + 9)?,
-        row.get(first + 10)?,
-        row.get(first + 11)?,
-    ))
+impl ChunkColumns {
+    /// Reads the twelve chunk columns in the order of the fields, starting at
+    /// column `first`.
+    fn read(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Self> {
+        Ok(Self {
+            section_index: row.get(first)?,
+            chunk_index: row.get(first + 1)?,
+            section_path: row.get(first + 2)?,
+            section_occurrence: row.get(first + 3)?,
+            section_level: row.get(first + 4)?,
+            source_start: row.get(first + 5)?,
+            source_end: row.get(first + 6)?,
+            kind: row.get(first + 7)?,
+            losses: row.get(first + 8)?,
+            templates: row.get(first + 9)?,
+            link_targets: row.get(first + 10)?,
+            text: row.get(first + 11)?,
+        })
+    }
 }
 
-fn stored_chunk(row: ChunkRow) -> Result<StoredChunk, StoreError> {
-    let (section, index, path, occurrence, level, start, end, kind, losses, templates, links, text) =
-        row;
+fn stored_chunk(columns: ChunkColumns) -> Result<StoredChunk, StoreError> {
     let invalid = |what| StoreError::Corrupt { what };
     Ok(StoredChunk {
-        section: usize::try_from(section).map_err(|_| invalid("section index"))?,
-        section_path: split_list(&path),
-        section_occurrence: u32::try_from(occurrence).map_err(|_| invalid("section occurrence"))?,
-        section_level: u8::try_from(level).map_err(|_| invalid("section level"))?,
-        index: usize::try_from(index).map_err(|_| invalid("chunk index"))?,
-        source: usize::try_from(start).map_err(|_| invalid("chunk range"))?
-            ..usize::try_from(end).map_err(|_| invalid("chunk range"))?,
-        kind: parse_kind(&kind)?,
-        losses: parse_losses(&losses)?,
-        templates: split_list(&templates),
-        link_targets: split_list(&links),
-        text,
+        section: usize::try_from(columns.section_index).map_err(|_| invalid("section index"))?,
+        section_path: split_list(&columns.section_path),
+        section_occurrence: u32::try_from(columns.section_occurrence)
+            .map_err(|_| invalid("section occurrence"))?,
+        section_level: u8::try_from(columns.section_level).map_err(|_| invalid("section level"))?,
+        index: usize::try_from(columns.chunk_index).map_err(|_| invalid("chunk index"))?,
+        source: usize::try_from(columns.source_start).map_err(|_| invalid("chunk range"))?
+            ..usize::try_from(columns.source_end).map_err(|_| invalid("chunk range"))?,
+        kind: parse_kind(&columns.kind)?,
+        losses: parse_losses(&columns.losses)?,
+        templates: split_list(&columns.templates),
+        link_targets: split_list(&columns.link_targets),
+        text: columns.text,
     })
 }
 
