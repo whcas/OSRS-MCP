@@ -13,6 +13,7 @@
 mod character;
 mod container;
 mod diary;
+mod envelope;
 mod experience;
 mod quest;
 mod skill;

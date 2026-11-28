@@ -6,10 +6,13 @@
 
 use std::collections::HashSet;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 use thiserror::Error;
 
 use super::ExportedAt;
+use super::envelope::{
+    EnvelopeError, MAX_ENVELOPE_TEXT_BYTES, decode_object, read_envelope, required,
+};
 use crate::domain::{ItemId, Quantity};
 
 /// Largest container export accepted, in bytes.
@@ -17,11 +20,8 @@ pub const MAX_CONTAINER_EXPORT_BYTES: usize = 4 * 1024 * 1024;
 /// Largest number of rows accepted in a container export.
 pub const MAX_CONTAINER_ROWS: usize = 4_096;
 
-const MAX_ENVELOPE_TEXT_BYTES: usize = 128;
 const MAX_ITEM_NAME_BYTES: usize = 256;
 const LAST_KNOWN_EQUIPMENT_SLOT: u16 = 13;
-
-type Fields = Map<String, Value>;
 
 /// Which inventory container a snapshot describes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,20 +191,8 @@ pub fn parse_container_export(
     expected: ContainerKind,
     bytes: &[u8],
 ) -> Result<ContainerSnapshot, ContainerParseError> {
-    if bytes.len() > MAX_CONTAINER_EXPORT_BYTES {
-        return Err(ContainerParseError::InputTooLarge);
-    }
-    let input: Value = serde_json::from_slice(bytes).map_err(|error| {
-        if error.is_eof() {
-            ContainerParseError::Truncated
-        } else {
-            ContainerParseError::InvalidJson
-        }
-    })?;
-    let fields = input
-        .as_object()
-        .ok_or(ContainerParseError::UnexpectedShape)?;
-    let kind = required(fields, "kind")?
+    let fields = decode_object(bytes, MAX_CONTAINER_EXPORT_BYTES)?;
+    let kind = required(&fields, "kind")?
         .as_str()
         .filter(|text| text.len() <= MAX_ENVELOPE_TEXT_BYTES)
         .ok_or(ContainerParseError::InvalidField { field: "kind" })?;
@@ -212,27 +200,12 @@ pub fn parse_container_export(
         return Err(ContainerParseError::WrongKind);
     }
 
-    let exported_at = required(fields, "exported_at")?
-        .as_str()
-        .filter(|text| text.len() <= MAX_ENVELOPE_TEXT_BYTES)
-        .and_then(ExportedAt::parse)
-        .ok_or(ContainerParseError::InvalidField {
-            field: "exported_at",
-        })?;
-    let plugin_version = match fields.get("plugin_version") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(text)) if text.len() <= MAX_ENVELOPE_TEXT_BYTES => Some(text.clone()),
-        Some(_) => {
-            return Err(ContainerParseError::InvalidField {
-                field: "plugin_version",
-            });
-        }
-    };
-    let items = required(fields, "items")?
+    let envelope = read_envelope(&fields)?;
+    let items = required(&fields, "items")?
         .as_array()
         .ok_or(ContainerParseError::InvalidField { field: "items" })?;
     let item_count =
-        required(fields, "item_count")?
+        required(&fields, "item_count")?
             .as_u64()
             .ok_or(ContainerParseError::InvalidField {
                 field: "item_count",
@@ -241,17 +214,24 @@ pub fn parse_container_export(
     let warnings = warnings_for(expected, &rows, item_count);
     Ok(ContainerSnapshot {
         kind: expected,
-        exported_at,
-        plugin_version,
+        exported_at: envelope.exported_at,
+        plugin_version: envelope.plugin_version,
         rows,
         warnings,
     })
 }
 
-fn required<'a>(fields: &'a Fields, field: &'static str) -> Result<&'a Value, ContainerParseError> {
-    fields
-        .get(field)
-        .ok_or(ContainerParseError::MissingField { field })
+impl From<EnvelopeError> for ContainerParseError {
+    fn from(error: EnvelopeError) -> Self {
+        match error {
+            EnvelopeError::InputTooLarge => Self::InputTooLarge,
+            EnvelopeError::Truncated => Self::Truncated,
+            EnvelopeError::InvalidJson => Self::InvalidJson,
+            EnvelopeError::UnexpectedShape => Self::UnexpectedShape,
+            EnvelopeError::MissingField { field } => Self::MissingField { field },
+            EnvelopeError::InvalidField { field } => Self::InvalidField { field },
+        }
+    }
 }
 
 fn read_rows(items: &[Value]) -> Result<Vec<ContainerRow>, ContainerParseError> {
