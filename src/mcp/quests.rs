@@ -1,7 +1,7 @@
 //! The `quest_status` tool: quest states from the local Character Exporter
 //! file.
 //!
-//! This module only adapts. Reading is [`LocalExportSource`](crate::runelite::LocalExportSource)
+//! This module only adapts. Reading is [`ExportSource`](crate::runelite::ExportSource)
 //! and parsing is [`parse_quest_export`](crate::runelite::parse_quest_export);
 //! here a parsed export becomes a filtered, paged response and a read failure
 //! becomes a fixed, safe status. Quest IDs are `RuneLite`'s own and are not
@@ -21,9 +21,7 @@ use serde::{Deserialize, Serialize};
 use super::OsrsMcpServer;
 use super::containers::ContentsStatus;
 use super::export_output::{ObservationTime, Page, bounded, bounded_name_to};
-use crate::runelite::{
-    LocalExportSource, QUEST_FILE_NAME, QuestProgress, QuestRecord, QuestState, QuestWarning,
-};
+use crate::runelite::{QUEST_FILE_NAME, QuestProgress, QuestRecord, QuestState, QuestWarning};
 
 /// Quests returned when `limit` is not given.
 const DEFAULT_LIMIT: usize = 100;
@@ -196,7 +194,7 @@ impl OsrsMcpServer {
 
         self.read_export(
             QUEST_FILE_NAME,
-            LocalExportSource::read_quests,
+            |source| source.read_quests(),
             |progress, read_at| quest_status(progress, &query, read_at),
         )
         .await

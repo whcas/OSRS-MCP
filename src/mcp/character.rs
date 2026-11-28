@@ -1,7 +1,7 @@
 //! The `character_summary` tool: skill levels from the local Character
 //! Exporter file.
 //!
-//! This module only adapts. Reading the file is [`LocalExportSource`] and
+//! This module only adapts. Reading the file is [`ExportSource`](crate::runelite::ExportSource) and
 //! parsing is [`parse_character_export`](crate::runelite::parse_character_export);
 //! here a parsed export becomes a bounded response and a read failure becomes a
 //! fixed, safe status. Nothing from the export beyond skill names, levels,
@@ -22,9 +22,7 @@ use super::OsrsMcpServer;
 use super::export_output::{
     EXPORTED_AT_MEANING, ExportedAtOutput, bounded, bounded_name, seconds_between, shown_version,
 };
-use crate::runelite::{
-    CHARACTER_FILE_NAME, CharacterExport, LocalExportSource, Skill, SkillRecord, Warning,
-};
+use crate::runelite::{CHARACTER_FILE_NAME, CharacterExport, Skill, SkillRecord, Warning};
 
 /// Most skills returned. Real exports have about two dozen.
 const MAX_SKILLS: usize = 64;
@@ -146,7 +144,7 @@ impl OsrsMcpServer {
     async fn character_summary(&self) -> Result<CallToolResult, ErrorData> {
         self.read_export(
             CHARACTER_FILE_NAME,
-            LocalExportSource::read_character,
+            |source| source.read_character(),
             summarise,
         )
         .await

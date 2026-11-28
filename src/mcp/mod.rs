@@ -34,7 +34,7 @@ use rmcp::{
 
 use crate::build_info;
 use crate::market::{ClientConfig, ConfigError, HardcoreClient};
-use crate::runelite::LocalExportSource;
+use crate::runelite::{ExportSource, LocalExportSource};
 use market_data::MarketData;
 
 pub use character::{CharacterSummary, SkillOutput, SummaryStatus, WarningOutput};
@@ -63,7 +63,7 @@ when it was retrieved; they never substitute standard-world data.";
 pub struct OsrsMcpServer {
     tool_router: ToolRouter<Self>,
     market: Arc<dyn MarketData>,
-    export_source: LocalExportSource,
+    export_source: Arc<dyn ExportSource>,
 }
 
 impl OsrsMcpServer {
@@ -93,14 +93,14 @@ impl OsrsMcpServer {
                 + Self::prices_router()
                 + Self::profit_router(),
             market,
-            export_source: LocalExportSource::unconfigured(),
+            export_source: Arc::new(LocalExportSource::unconfigured()),
         }
     }
 
     /// Sets where account tools read the local `RuneLite` export from.
     #[must_use]
-    pub fn with_export_source(mut self, source: LocalExportSource) -> Self {
-        self.export_source = source;
+    pub fn with_export_source(mut self, source: impl ExportSource + 'static) -> Self {
+        self.export_source = Arc::new(source);
         self
     }
 }
