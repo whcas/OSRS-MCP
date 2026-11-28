@@ -1,8 +1,10 @@
 //! Core library for the OSRS Hardcore worlds advisor.
 //!
 //! Domain logic lives here, independent of any transport. The binary in
-//! `src/main.rs` is a thin adapter over this crate.
+//! `src/main.rs` is a thin adapter over this crate; [`cli`] holds the grammar
+//! and output of its commands.
 
+pub mod cli;
 pub mod domain;
 pub mod eval;
 pub mod market;

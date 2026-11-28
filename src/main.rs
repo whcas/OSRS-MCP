@@ -4,42 +4,34 @@
 //! diagnostics go to stderr. In particular `serve` must never write anything
 //! but protocol messages to stdout.
 
-use std::ffi::OsString;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
+use clap::Parser;
 use osrs_mcp::BuildInfo;
+use osrs_mcp::wiki::commands::{self, CommandError};
 
-/// Exit code for incorrect command-line usage.
+use osrs_mcp::cli::{self, Cli, Command, WikiCommand};
+
+/// Exit code for incorrect command-line usage, which is also what the parser
+/// reports for its own errors.
 const USAGE_ERROR: u8 = 2;
-
-/// What the user asked the binary to do.
-#[derive(Debug, PartialEq, Eq)]
-enum Command {
-    /// Print the name and version to stdout.
-    Version,
-    /// Serve MCP over stdin and stdout until the client disconnects.
-    Serve,
-    /// Arguments were missing or not recognised.
-    Usage,
-}
 
 fn main() -> ExitCode {
     let info = osrs_mcp::build_info();
 
     // `args_os` rather than `args`: the latter panics on non-Unicode input.
-    match parse_command(std::env::args_os().skip(1)) {
-        Command::Version => match write_version(&mut io::stdout().lock(), info) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::FAILURE,
-        },
-        Command::Serve => run_server(info),
-        Command::Usage => {
-            // Best effort: there is nowhere left to report a failure to write
-            // to stderr, and the exit code still signals the usage error.
-            let _ = write_usage(&mut io::stderr().lock(), info);
-            ExitCode::from(USAGE_ERROR)
+    let cli = match Cli::try_parse_from(std::env::args_os()) {
+        Ok(cli) => cli,
+        Err(error) => {
+            // Best effort: there is nowhere left to report a failure to write.
+            let _ = error.print();
+            return ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(USAGE_ERROR));
         }
+    };
+    match cli.command {
+        Command::Serve => run_server(info),
+        Command::Wiki { command } => run_wiki(command),
     }
 }
 
@@ -54,16 +46,6 @@ fn describe(error: &dyn std::error::Error) -> String {
         cause = next.source();
     }
     text
-}
-
-/// Maps command-line arguments (excluding the program name) to a command.
-fn parse_command(args: impl IntoIterator<Item = OsString>) -> Command {
-    let mut args = args.into_iter();
-    match (args.next(), args.next()) {
-        (Some(flag), None) if flag == "--version" || flag == "-V" => Command::Version,
-        (Some(subcommand), None) if subcommand == "serve" => Command::Serve,
-        _ => Command::Usage,
-    }
 }
 
 /// Runs the MCP server on stdio, reporting progress and failures on stderr.
@@ -98,39 +80,58 @@ fn run_server(info: BuildInfo) -> ExitCode {
     }
 }
 
-/// Writes the version line, for example `osrs-mcp 0.1.0`.
-fn write_version(out: &mut impl Write, info: BuildInfo) -> io::Result<()> {
-    writeln!(out, "{} {}", info.name, info.version)
+/// Runs a Wiki command: the result goes to stdout, failures to stderr.
+fn run_wiki(command: WikiCommand) -> ExitCode {
+    match command {
+        WikiCommand::Import(args) => {
+            finish(commands::import(&args.request()).map(|report| cli::render::import(&report)))
+        }
+        WikiCommand::Search(args) => match args.request() {
+            Ok(request) => {
+                finish(commands::search(&request).map(|report| cli::render::search(&report)))
+            }
+            Err(error) => {
+                let _ = writeln!(io::stderr().lock(), "osrs-mcp: {error}");
+                ExitCode::from(USAGE_ERROR)
+            }
+        },
+        WikiCommand::Page(args) => match commands::page(&args.request()) {
+            Ok(report) => match cli::render::page(&report) {
+                Ok(text) => print(&text),
+                Err(message) => {
+                    let _ = writeln!(io::stderr().lock(), "osrs-mcp: {message}");
+                    ExitCode::FAILURE
+                }
+            },
+            Err(error) => failure(&error),
+        },
+    }
 }
 
-/// Writes the usage message shown when arguments are missing or invalid.
-fn write_usage(out: &mut impl Write, info: BuildInfo) -> io::Result<()> {
-    writeln!(
-        out,
-        "{name} {version}\n\nUsage:\n  {name} serve      Serve MCP over stdio (for MCP clients)\n  {name} --version  Print the version",
-        name = info.name,
-        version = info.version,
-    )
+/// Prints a successful result, or reports the failure.
+fn finish(result: Result<String, CommandError>) -> ExitCode {
+    match result {
+        Ok(text) => print(&text),
+        Err(error) => failure(&error),
+    }
+}
+
+fn print(text: &str) -> ExitCode {
+    match io::stdout().lock().write_all(text.as_bytes()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::FAILURE,
+    }
+}
+
+fn failure(error: &CommandError) -> ExitCode {
+    // Best effort: there is nowhere left to report a failure to write.
+    let _ = writeln!(io::stderr().lock(), "osrs-mcp: {}", describe(error));
+    ExitCode::FAILURE
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const INFO: BuildInfo = BuildInfo {
-        name: "osrs-mcp",
-        version: "1.2.3",
-    };
-
-    fn parse(args: &[&str]) -> Command {
-        parse_command(args.iter().map(OsString::from))
-    }
-
-    #[test]
-    fn version_flags_select_version() {
-        assert_eq!(parse(&["--version"]), Command::Version);
-        assert_eq!(parse(&["-V"]), Command::Version);
-    }
 
     #[test]
     fn describe_appends_the_cause_of_a_serve_error() {
@@ -140,40 +141,11 @@ mod tests {
     }
 
     #[test]
-    fn serve_subcommand_selects_serve() {
-        assert_eq!(parse(&["serve"]), Command::Serve);
-    }
-
-    #[test]
-    fn missing_extra_or_unknown_arguments_select_usage() {
-        assert_eq!(parse(&[]), Command::Usage);
-        assert_eq!(parse(&["--help"]), Command::Usage);
-        assert_eq!(parse(&["--version", "extra"]), Command::Usage);
-        assert_eq!(parse(&["serve", "extra"]), Command::Usage);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn non_unicode_argument_selects_usage() {
-        use std::os::unix::ffi::OsStringExt;
-
-        let args = [OsString::from_vec(b"--\xff".to_vec())];
-        assert_eq!(parse_command(args), Command::Usage);
-    }
-
-    #[test]
-    fn version_output_is_name_and_version() {
-        let mut out = Vec::new();
-        write_version(&mut out, INFO).unwrap();
-        assert_eq!(out, b"osrs-mcp 1.2.3\n");
-    }
-
-    #[test]
-    fn usage_output_names_the_supported_commands() {
-        let mut out = Vec::new();
-        write_usage(&mut out, INFO).unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("osrs-mcp serve"), "usage: {text}");
-        assert!(text.contains("osrs-mcp --version"), "usage: {text}");
+    fn describe_appends_the_cause_of_a_command_error_without_a_path() {
+        let error = CommandError::ExportFile(io::Error::other("os says /secret/path"));
+        assert_eq!(
+            describe(&error),
+            "the export file could not be opened: os says /secret/path"
+        );
     }
 }
