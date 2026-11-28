@@ -666,4 +666,43 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn the_envelope_timestamp_and_plugin_version_are_validated() {
+        let mut input = export();
+        let plugin_version =
+            |input: &Value| parse(input).map(|parsed| parsed.plugin_version().map(str::len));
+        let error = |input: &Value| parse(input).err();
+
+        input["plugin_version"] = json!("v".repeat(128));
+        assert_eq!(plugin_version(&input), Ok(Some(128)));
+        for invalid in [json!("v".repeat(129)), json!(7)] {
+            input["plugin_version"] = invalid;
+            assert_eq!(
+                error(&input),
+                Some(DiaryParseError::InvalidField {
+                    field: "plugin_version"
+                })
+            );
+        }
+        input["plugin_version"] = Value::Null;
+        assert_eq!(plugin_version(&input), Ok(None));
+        input.as_object_mut().unwrap().remove("plugin_version");
+        assert_eq!(plugin_version(&input), Ok(None));
+
+        input["exported_at"] = json!("yesterday");
+        assert_eq!(
+            error(&input),
+            Some(DiaryParseError::InvalidField {
+                field: "exported_at"
+            })
+        );
+        input.as_object_mut().unwrap().remove("exported_at");
+        assert_eq!(
+            error(&input),
+            Some(DiaryParseError::MissingField {
+                field: "exported_at"
+            })
+        );
+    }
 }
