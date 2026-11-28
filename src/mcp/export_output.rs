@@ -386,7 +386,8 @@ mod tests {
         assert_eq!(page(9, 2).select(&items, |n| *n), (vec![], false));
     }
 
-    /// An export source whose quest read is whatever the test supplies, so the
+    /// An export source whose quest read is whatever the test supplies (other
+    /// reads are not configured), so the
     /// adapter can be driven through failures a real directory cannot be made
     /// to produce on demand.
     #[derive(Debug)]
@@ -394,11 +395,11 @@ mod tests {
 
     impl ExportSource for ScriptedExports {
         fn read_character(&self) -> Result<CharacterExport, ExportReadError> {
-            panic!("only quests are scripted");
+            Err(ExportReadError::NotConfigured)
         }
 
         fn read_container(&self, _: ContainerKind) -> Result<ContainerSnapshot, ExportReadError> {
-            panic!("only quests are scripted");
+            Err(ExportReadError::NotConfigured)
         }
 
         fn read_quests(&self) -> Result<QuestProgress, ExportReadError> {
