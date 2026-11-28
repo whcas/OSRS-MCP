@@ -60,6 +60,7 @@ async fn tool_discovery_lists_only_described_read_only_tools_including_server_in
         names,
         [
             "bank_contents",
+            "calculate_profit",
             "character_summary",
             "equipment_contents",
             "item_prices",
