@@ -9,6 +9,7 @@
 //! - `export`: the streaming importer for `Special:Export` XML ([`ExportReader`]).
 //! - `model`: plain types for a page and its provenance ([`ImportedPage`],
 //!   [`SourceId`]).
+//! - `queue`: rules for the manual page request queue ([`queue::RequestQueue`]).
 //! - `sections`: section paths and bounded chunks for retrieval ([`prepare`]).
 //! - `timestamp`: the export's fixed-shape revision timestamp.
 //!
@@ -16,6 +17,7 @@
 
 mod export;
 mod model;
+pub mod queue;
 mod sections;
 mod store;
 mod timestamp;
