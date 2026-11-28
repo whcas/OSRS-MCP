@@ -10,7 +10,8 @@ use rmcp::{
 };
 use serde::Serialize;
 
-use crate::runelite::{ExportReadError, ExportedAt};
+use super::OsrsMcpServer;
+use crate::runelite::{ExportReadError, ExportedAt, LocalExportSource};
 
 /// Longest display name returned, in characters. Names come from the export
 /// and are untrusted.
@@ -133,6 +134,34 @@ pub struct ExportFailure {
     /// never quotes the file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+}
+
+impl OsrsMcpServer {
+    /// Reads one export file and builds the tool result from it.
+    ///
+    /// `read` runs on a blocking thread, since it is file I/O. `build` then
+    /// receives the parsed export and the time of reading: a single clock
+    /// sample taken after the read serves both `read_at` and the age. A read
+    /// failure becomes the fixed failure for `file`.
+    pub(super) async fn read_export<T, O>(
+        &self,
+        file: &'static str,
+        read: impl FnOnce(&LocalExportSource) -> Result<T, ExportReadError> + Send + 'static,
+        build: impl FnOnce(&T, Timestamp) -> O + Send,
+    ) -> Result<CallToolResult, ErrorData>
+    where
+        T: Send + 'static,
+        O: Serialize,
+    {
+        let source = self.export_source.clone();
+        let read = tokio::task::spawn_blocking(move || read(&source))
+            .await
+            .map_err(|_| ErrorData::internal_error("the export read task failed", None))?;
+        let outcome = read
+            .map(|export| build(&export, Timestamp::now()))
+            .map_err(|error| failure_for(&error, file));
+        into_result(outcome)
+    }
 }
 
 /// Serialises the outcome. A failure is an error result whose text is the

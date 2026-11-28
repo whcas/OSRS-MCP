@@ -20,11 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use super::OsrsMcpServer;
 use super::containers::ContentsStatus;
-use super::export_output::{
-    ExportFailure, ObservationTime, Page, bounded, bounded_name_to, failure_for, into_result,
-};
+use super::export_output::{ObservationTime, Page, bounded, bounded_name_to};
 use crate::runelite::{
-    ExportReadError, QUEST_FILE_NAME, QuestProgress, QuestRecord, QuestState, QuestWarning,
+    LocalExportSource, QUEST_FILE_NAME, QuestProgress, QuestRecord, QuestState, QuestWarning,
 };
 
 /// Quests returned when `limit` is not given.
@@ -196,23 +194,13 @@ impl OsrsMcpServer {
             .into_query()
             .map_err(|message| ErrorData::invalid_params(message, None))?;
 
-        // The read is blocking file I/O, so it stays off the async executor.
-        let source = self.export_source.clone();
-        let read = tokio::task::spawn_blocking(move || source.read_quests())
-            .await
-            .map_err(|_| ErrorData::internal_error("the export read task failed", None))?;
-
-        // One clock sample, taken after the read, serves both `read_at` and the age.
-        let outcome = read
-            .map(|progress| quest_status(&progress, &query, Timestamp::now()))
-            .map_err(|error| quest_failure(&error));
-        into_result(outcome)
+        self.read_export(
+            QUEST_FILE_NAME,
+            LocalExportSource::read_quests,
+            |progress, read_at| quest_status(progress, &query, read_at),
+        )
+        .await
     }
-}
-
-/// The fixed failure for `quests.json`.
-fn quest_failure(error: &ExportReadError) -> ExportFailure {
-    failure_for(error, QUEST_FILE_NAME)
 }
 
 /// Builds the response for a parsed export, read at `read_at`.
@@ -274,8 +262,9 @@ const fn warning_output(warning: QuestWarning) -> QuestWarningOutput {
 
 #[cfg(test)]
 mod tests {
+    use super::super::export_output::failure_for;
     use super::*;
-    use crate::runelite::parse_quest_export;
+    use crate::runelite::{ExportReadError, parse_quest_export};
 
     const SYNTHETIC: &[u8] =
         include_bytes!("../../tests/fixtures/runelite_export/quests.synthetic.json");
@@ -544,7 +533,7 @@ mod tests {
 
     #[test]
     fn failures_name_quests_json_and_never_a_path() {
-        let failure = quest_failure(&ExportReadError::FileNotFound);
+        let failure = failure_for(&ExportReadError::FileNotFound, QUEST_FILE_NAME);
 
         assert!(
             failure.message.contains("quests.json"),
