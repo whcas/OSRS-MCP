@@ -15,6 +15,7 @@ mod info;
 mod market;
 mod market_data;
 mod prices;
+mod profit;
 mod provenance;
 mod quests;
 #[cfg(test)]
@@ -89,7 +90,8 @@ impl OsrsMcpServer {
                 + Self::containers_router()
                 + Self::quests_router()
                 + Self::market_router()
-                + Self::prices_router(),
+                + Self::prices_router()
+                + Self::profit_router(),
             market,
             export_source: LocalExportSource::unconfigured(),
         }

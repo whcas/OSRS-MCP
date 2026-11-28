@@ -76,6 +76,7 @@ The `sleep` keeps stdin open long enough for the server to answer before it sees
 | `equipment_contents` | Read-only. Equipped items (slot, item id, quantity, optional name) from the local RuneLite Character Exporter `equipment.json`, with the exporter timestamp and import warnings. No prices or totals. Needs `OSRS_MCP_RUNELITE_EXPORT_DIR`; see [docs/local-exports.md](docs/local-exports.md). |
 | `item_search` | Read-only. Finds Hardcore items by id or name, with source and retrieval time. One request to the Hardcore prices API per call. See [docs/market-tools.md](docs/market-tools.md). |
 | `item_prices` | Read-only. Latest observed Hardcore instant-buy and instant-sell trades for one item id, each with price, trade time, age and per-side freshness, plus source and retrieval time. One request per call. See [docs/market-tools.md](docs/market-tools.md). |
+| `calculate_profit` | Read-only, no network. Deterministic profit, fees and ROI for a trade from explicit prices, quantity and an explicit fee policy. See [docs/calculate-profit.md](docs/calculate-profit.md). |
 
 ## Development
 
