@@ -2,10 +2,11 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 use thiserror::Error;
 
 use super::ExportedAt;
+use super::envelope::{EnvelopeError, Fields, decode_object, read_envelope, required};
 
 /// Largest diary export accepted, in bytes.
 pub const MAX_DIARY_EXPORT_BYTES: usize = 2 * 1024 * 1024;
@@ -235,8 +236,6 @@ impl DiaryParseError {
     }
 }
 
-type Fields = Map<String, Value>;
-
 /// Parses a diary export without I/O.
 ///
 /// Limits are 64 areas, 16 tier keys per area
@@ -248,19 +247,9 @@ type Fields = Map<String, Value>;
 /// Returns [`DiaryParseError`] on unsupported structure, malformed input or a
 /// limit violation. Disagreement between observations is recorded as warnings.
 pub fn parse_diary_export(bytes: &[u8]) -> Result<DiaryProgress, DiaryParseError> {
-    if bytes.len() > MAX_DIARY_EXPORT_BYTES {
-        return Err(DiaryParseError::InputTooLarge);
-    }
-    let input: Value = serde_json::from_slice(bytes).map_err(|error| {
-        if error.is_eof() {
-            DiaryParseError::Truncated
-        } else {
-            DiaryParseError::InvalidJson
-        }
-    })?;
-    let fields = input.as_object().ok_or(DiaryParseError::UnexpectedShape)?;
-    let (exported_at, plugin_version) = read_envelope(fields)?;
-    let diaries = required(fields, "diaries")?
+    let fields = decode_object(bytes, MAX_DIARY_EXPORT_BYTES)?;
+    let envelope = read_envelope(&fields)?;
+    let diaries = required(&fields, "diaries")?
         .as_object()
         .ok_or(DiaryParseError::InvalidField { field: "diaries" })?;
     let mut warnings = Vec::new();
@@ -269,37 +258,24 @@ pub fn parse_diary_export(bytes: &[u8]) -> Result<DiaryProgress, DiaryParseError
         check_summary(summary, &areas, &mut warnings)?;
     }
     Ok(DiaryProgress {
-        exported_at,
-        plugin_version,
+        exported_at: envelope.exported_at,
+        plugin_version: envelope.plugin_version,
         areas,
         warnings,
     })
 }
 
-fn required<'a>(fields: &'a Fields, field: &'static str) -> Result<&'a Value, DiaryParseError> {
-    fields
-        .get(field)
-        .ok_or(DiaryParseError::MissingField { field })
-}
-
-fn read_envelope(fields: &Fields) -> Result<(ExportedAt, Option<String>), DiaryParseError> {
-    let exported_at = required(fields, "exported_at")?
-        .as_str()
-        .filter(|text| text.len() <= MAX_LABEL_BYTES)
-        .and_then(ExportedAt::parse)
-        .ok_or(DiaryParseError::InvalidField {
-            field: "exported_at",
-        })?;
-    let plugin_version = match fields.get("plugin_version") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(text)) if text.len() <= MAX_LABEL_BYTES => Some(text.clone()),
-        Some(_) => {
-            return Err(DiaryParseError::InvalidField {
-                field: "plugin_version",
-            });
+impl From<EnvelopeError> for DiaryParseError {
+    fn from(error: EnvelopeError) -> Self {
+        match error {
+            EnvelopeError::InputTooLarge => Self::InputTooLarge,
+            EnvelopeError::Truncated => Self::Truncated,
+            EnvelopeError::InvalidJson => Self::InvalidJson,
+            EnvelopeError::UnexpectedShape => Self::UnexpectedShape,
+            EnvelopeError::MissingField { field } => Self::MissingField { field },
+            EnvelopeError::InvalidField { field } => Self::InvalidField { field },
         }
-    };
-    Ok((exported_at, plugin_version))
+    }
 }
 
 fn read_areas(
@@ -663,6 +639,47 @@ mod tests {
                 area: 1,
                 tier: DiaryTier::Easy,
                 field: "tasks"
+            })
+        );
+    }
+
+    #[test]
+    fn the_envelope_timestamp_and_plugin_version_are_validated() {
+        let mut input = export();
+        let plugin_version =
+            |input: &Value| parse(input).map(|parsed| parsed.plugin_version().map(str::len));
+        let error = |input: &Value| parse(input).err();
+
+        input["plugin_version"] = json!("v".repeat(128));
+        assert_eq!(plugin_version(&input), Ok(Some(128)));
+        for invalid in [json!("v".repeat(129)), json!(7)] {
+            input["plugin_version"] = invalid;
+            assert_eq!(
+                error(&input),
+                Some(DiaryParseError::InvalidField {
+                    field: "plugin_version"
+                })
+            );
+        }
+        input["plugin_version"] = Value::Null;
+        assert_eq!(plugin_version(&input), Ok(None));
+        input.as_object_mut().unwrap().remove("plugin_version");
+        assert_eq!(plugin_version(&input), Ok(None));
+
+        // With both invalid, `exported_at` is the one reported.
+        input["exported_at"] = json!("yesterday");
+        input["plugin_version"] = json!(7);
+        assert_eq!(
+            error(&input),
+            Some(DiaryParseError::InvalidField {
+                field: "exported_at"
+            })
+        );
+        input.as_object_mut().unwrap().remove("exported_at");
+        assert_eq!(
+            error(&input),
+            Some(DiaryParseError::MissingField {
+                field: "exported_at"
             })
         );
     }
