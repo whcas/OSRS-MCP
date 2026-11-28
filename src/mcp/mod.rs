@@ -195,3 +195,31 @@ where
         .map(|_| ())
         .map_err(|error| ServeError::Connection(Box::new(error)))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::*;
+
+    fn cause() -> Cause {
+        Box::new(std::io::Error::other("pipe closed"))
+    }
+
+    #[test]
+    fn each_serve_error_has_its_own_message_and_exposes_its_cause() {
+        let errors = [
+            (
+                ServeError::Configuration(cause()),
+                "MCP server could not be configured",
+            ),
+            (ServeError::Initialize(cause()), "MCP initialization failed"),
+            (ServeError::Connection(cause()), "MCP connection failed"),
+        ];
+        for (error, message) in errors {
+            assert_eq!(error.to_string(), message);
+            let source = error.source().expect("every variant keeps its cause");
+            assert_eq!(source.to_string(), "pipe closed");
+        }
+    }
+}
