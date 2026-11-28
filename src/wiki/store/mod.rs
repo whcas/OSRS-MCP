@@ -636,25 +636,49 @@ fn read_page(
 
 fn stored_page(row: PageRow) -> Result<StoredPage, StoreError> {
     let (page_id, namespace, title, revision, time, hash, redirect, text) = row;
-    let invalid = |what| StoreError::Corrupt { what };
     Ok(StoredPage {
-        id: u64::try_from(page_id)
-            .ok()
-            .and_then(PageId::new)
-            .ok_or_else(|| invalid("page id"))?,
-        namespace: u32::try_from(namespace).map_err(|_| invalid("namespace"))?,
-        title: PageTitle::new(title).ok_or_else(|| invalid("title"))?,
-        revision: u64::try_from(revision)
-            .ok()
-            .and_then(RevisionId::new)
-            .ok_or_else(|| invalid("revision id"))?,
-        timestamp: RevisionTimestamp::parse(&time).map_err(|_| invalid("revision time"))?,
+        id: stored_page_id(page_id)?,
+        namespace: u32::try_from(namespace)
+            .map_err(|_| StoreError::Corrupt { what: "namespace" })?,
+        title: stored_title(title, "title")?,
+        revision: stored_revision_id(revision)?,
+        timestamp: stored_revision_time(&time)?,
         hash,
         redirect_target: redirect
-            .map(|target| PageTitle::new(target).ok_or_else(|| invalid("redirect target")))
+            .map(|target| stored_title(target, "redirect target"))
             .transpose()?,
         text,
     })
+}
+
+// The page columns below are written only from validated values, so a value
+// that does not convert back means the database was changed from outside.
+
+fn stored_page_id(value: i64) -> Result<PageId, StoreError> {
+    u64::try_from(value)
+        .ok()
+        .and_then(PageId::new)
+        .ok_or(StoreError::Corrupt { what: "page id" })
+}
+
+fn stored_revision_id(value: i64) -> Result<RevisionId, StoreError> {
+    u64::try_from(value)
+        .ok()
+        .and_then(RevisionId::new)
+        .ok_or(StoreError::Corrupt {
+            what: "revision id",
+        })
+}
+
+fn stored_revision_time(text: &str) -> Result<RevisionTimestamp, StoreError> {
+    RevisionTimestamp::parse(text).map_err(|_| StoreError::Corrupt {
+        what: "revision time",
+    })
+}
+
+/// A stored title, named `what` in the error (a page title or a redirect target).
+fn stored_title(text: String, what: &'static str) -> Result<PageTitle, StoreError> {
+    PageTitle::new(text).ok_or(StoreError::Corrupt { what })
 }
 
 type ChunkRow = (

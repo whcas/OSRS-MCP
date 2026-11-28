@@ -26,7 +26,8 @@ use thiserror::Error;
 
 use super::{
     Operation, PageId, PageTitle, RevisionId, RevisionTimestamp, SourceId, Store, StoreError,
-    StoredChunk, chunk_row, find_source, stored_chunk,
+    StoredChunk, chunk_row, find_source, stored_chunk, stored_page_id, stored_revision_id,
+    stored_revision_time, stored_title,
 };
 
 /// The longest query text accepted, in bytes.
@@ -200,18 +201,11 @@ type HitRow = (i64, String, i64, String, super::ChunkRow);
 
 fn hit(row: HitRow) -> Result<SearchHit, StoreError> {
     let (page, title, revision, time, chunk) = row;
-    let invalid = |what| StoreError::Corrupt { what };
     Ok(SearchHit {
-        page: u64::try_from(page)
-            .ok()
-            .and_then(PageId::new)
-            .ok_or_else(|| invalid("page id"))?,
-        title: PageTitle::new(title).ok_or_else(|| invalid("title"))?,
-        revision: u64::try_from(revision)
-            .ok()
-            .and_then(RevisionId::new)
-            .ok_or_else(|| invalid("revision id"))?,
-        timestamp: RevisionTimestamp::parse(&time).map_err(|_| invalid("revision time"))?,
+        page: stored_page_id(page)?,
+        title: stored_title(title, "title")?,
+        revision: stored_revision_id(revision)?,
+        timestamp: stored_revision_time(&time)?,
         chunk: stored_chunk(chunk)?,
     })
 }
