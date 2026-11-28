@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use super::ExportedAt;
 use super::envelope::{
-    EnvelopeError, MAX_ENVELOPE_TEXT_BYTES, decode_object, read_envelope, required,
+    EnvelopeError, Fields, MAX_ENVELOPE_TEXT_BYTES, decode_object, read_envelope, required,
 };
 use crate::domain::{ItemId, Quantity};
 
@@ -192,14 +192,7 @@ pub fn parse_container_export(
     bytes: &[u8],
 ) -> Result<ContainerSnapshot, ContainerParseError> {
     let fields = decode_object(bytes, MAX_CONTAINER_EXPORT_BYTES)?;
-    let kind = required(&fields, "kind")?
-        .as_str()
-        .filter(|text| text.len() <= MAX_ENVELOPE_TEXT_BYTES)
-        .ok_or(ContainerParseError::InvalidField { field: "kind" })?;
-    if kind != expected.key() {
-        return Err(ContainerParseError::WrongKind);
-    }
-
+    check_kind(&fields, expected)?;
     let envelope = read_envelope(&fields)?;
     let items = required(&fields, "items")?
         .as_array()
@@ -219,6 +212,19 @@ pub fn parse_container_export(
         rows,
         warnings,
     })
+}
+
+/// Rejects an export that describes another container than the one asked for.
+fn check_kind(fields: &Fields, expected: ContainerKind) -> Result<(), ContainerParseError> {
+    let kind = required(fields, "kind")?
+        .as_str()
+        .filter(|text| text.len() <= MAX_ENVELOPE_TEXT_BYTES)
+        .ok_or(ContainerParseError::InvalidField { field: "kind" })?;
+    if kind == expected.key() {
+        Ok(())
+    } else {
+        Err(ContainerParseError::WrongKind)
+    }
 }
 
 impl From<EnvelopeError> for ContainerParseError {
