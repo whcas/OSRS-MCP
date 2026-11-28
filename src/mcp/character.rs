@@ -19,9 +19,7 @@ use rmcp::{
 use serde::Serialize;
 
 use super::OsrsMcpServer;
-use super::export_output::{
-    EXPORTED_AT_MEANING, ExportedAtOutput, bounded, bounded_name, seconds_between, shown_version,
-};
+use super::export_output::{ExportedAtOutput, ObservationTime, bounded, bounded_name};
 use crate::runelite::{
     CHARACTER_FILE_NAME, CharacterExport, LocalExportSource, Skill, SkillRecord, Warning,
 };
@@ -155,21 +153,27 @@ impl OsrsMcpServer {
 
 /// Builds the response for a parsed export, read at `read_at`.
 fn summarise(export: &CharacterExport, read_at: Timestamp) -> CharacterSummary {
-    let exported_at = export.exported_at().timestamp();
-    let (plugin_version, plugin_version_suppressed) = shown_version(export.plugin_version());
+    // The timing rules are shared with the other account tools; this response
+    // keeps its own flat field layout.
+    let ObservationTime {
+        exported_at,
+        exported_at_meaning,
+        read_at,
+        seconds_since_last_change,
+        exported_at_in_future,
+        plugin_version,
+        plugin_version_suppressed,
+    } = ObservationTime::new(export.exported_at(), export.plugin_version(), read_at);
     let (warnings, warning_count) = bounded(export.warnings(), MAX_WARNINGS, warning_output);
     let (skills, skill_count) = bounded(export.skills(), MAX_SKILLS, skill_output);
 
     CharacterSummary {
         status: SummaryStatus::Ok,
-        exported_at: ExportedAtOutput {
-            text: export.exported_at().text().to_owned(),
-            utc: exported_at.to_string(),
-        },
-        exported_at_meaning: EXPORTED_AT_MEANING.to_owned(),
-        read_at: read_at.to_string(),
-        seconds_since_last_change: seconds_between(exported_at, read_at),
-        exported_at_in_future: exported_at > read_at,
+        exported_at,
+        exported_at_meaning,
+        read_at,
+        seconds_since_last_change,
+        exported_at_in_future,
         plugin_version,
         plugin_version_suppressed,
         skills_truncated: skill_count > skills.len(),
@@ -214,7 +218,7 @@ mod tests {
     use std::io;
 
     use super::super::export_output::{
-        ExportFailure, FailureStatus, MAX_NAME_CHARS, UnreadableReason, failure_for,
+        ExportFailure, FailureStatus, MAX_NAME_CHARS, UnreadableReason, failure_for, shown_version,
     };
     use super::*;
     use crate::runelite::{CharacterParseError, ExportReadError, parse_character_export};
